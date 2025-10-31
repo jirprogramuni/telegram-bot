@@ -1,1 +1,1 @@
-python-telegram-bot[webhooks]==22.5
+pyTelegramBotAPI==4.14.0\nflask==3.0.3\nrequests==2.32.3
