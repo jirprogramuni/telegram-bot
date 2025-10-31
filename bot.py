@@ -8,7 +8,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 # Токен бота и ID админа
-BOT_TOKEN = '8341734422:AAFItc0lswkEitKsJwhR7x19-Od7a1n2J68'  # Замени на свой токен
+BOT_TOKEN = '7478861606:AAF-7eV0XjTn7S_6Q_caIk7Y27kGsfU_f-A'  # Замени на свой токен
 ADMIN_ID = 476747112  # Замени на свой user ID (число)
 
 bot = telebot.TeleBot(BOT_TOKEN)
