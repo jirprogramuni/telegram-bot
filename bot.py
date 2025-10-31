@@ -1,73 +1,106 @@
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import flask
 import os
 import logging
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-    ConversationHandler,
-)
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-ADMIN_CHAT_ID = int(os.environ["ADMIN_CHAT_ID"])
-
-NAME = 1
-
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[KeyboardButton("Зарегистрироваться")]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-    await update.message.reply_text("Привет! Нажми кнопку, чтобы зарегистрироваться:", reply_markup=reply_markup)
-    return NAME
+# Токен бота и ID админа
+BOT_TOKEN = '8341734422:AAFItc0lswkEitKsJwhR7x19-Od7a1n2J68'  # Замени на свой токен
+ADMIN_ID = 476747112  # Замени на свой user ID (число)
 
-async def handle_registration_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text == "Зарегистрироваться":
-        await update.message.reply_text("Пожалуйста, введите ваше имя:")
-        return NAME
-    else:
-        user_full_name = update.message.text.strip()
-        user = update.effective_user
+bot = telebot.TeleBot(BOT_TOKEN)
 
-        username = f"@{user.username}" if user.username else "нет юзернейма"
-        user_id = user.id
-        first_name = user.first_name or "не указано"
+# Словарь для хранения состояний пользователей (чтобы знать, когда ждать имя)
+user_states = {}
 
-        await update.message.reply_text("Вы успешно зарегистрированы!")
 
-        admin_message = (
-            f"Новая регистрация:\n"
-            f"Имя: {user_full_name}\n"
-            f"Telegram: {username}\n"
-            f"ID: {user_id}\n"
-            f"First name: {first_name}"
+# Обработчик /start
+@bot.message_handler(commands=['start'])
+def start(message):
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("Зарегистрироваться ✅", callback_data="register"))
+
+    bot.send_message(
+        message.chat.id,
+        "*Добро пожаловать!*\n\nНажмите кнопку ниже, чтобы зарегистрироваться. 😊",
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
+
+
+# Обработчик нажатия кнопки
+@bot.callback_query_handler(func=lambda call: True)
+def callback_query(call):
+    if call.data == "register":
+        user_states[call.from_user.id] = "waiting_for_name"
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.from_user.id,
+            "*Введите ваше имя:* ✍️",
+            parse_mode='Markdown'
         )
-        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_message)
 
-        return ConversationHandler.END
 
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+# Обработчик текстовых сообщений (для ввода имени)
+@bot.message_handler(func=lambda message: True)
+def handle_text(message):
+    user_id = message.from_user.id
+    if user_id in user_states and user_states[user_id] == "waiting_for_name":
+        name = message.text.strip()
+        username = message.from_user.username or "Не указан"
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_registration_button)],
-        },
-        fallbacks=[],
-    )
+        # Отправляем ответ пользователю
+        bot.send_message(
+            user_id,
+            f"*Вы успешно зарегистрированы! 🎉*\n\nВаше имя: {name}",
+            parse_mode='Markdown'
+        )
 
-    app.add_handler(conv_handler)
+        # Отправляем данные админу
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                f"*Новая регистрация! 📋*\n\nИмя: {name}\nUsername: @{username}\nID: {user_id}",
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logging.error(f"Ошибка отправки админу: {e}")
 
-    port = int(os.environ.get("PORT", 8000))
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=BOT_TOKEN,
-        webhook_url=f"https://{os.environ['RENDER_EXTERNAL_URL']}/{BOT_TOKEN}"
-    )
+        # Сбрасываем состояние
+        del user_states[user_id]
 
-if __name__ == "__main__":
-    main()
+
+# Для webhook на Render
+app = flask.Flask(__name__)
+
+
+@app.route('/', methods=['GET', 'HEAD'])
+def index():
+    return ''
+
+
+@app.route('/', methods=['POST'])
+def webhook():
+    if flask.request.headers.get('content-type') == 'application/json':
+        json_string = flask.request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return ''
+    else:
+        flask.abort(403)
+
+
+if __name__ == '__main__':
+    # Удаляем старый webhook, если есть
+    bot.remove_webhook()
+
+    # Устанавливаем новый webhook (для Render)
+    # Замени 'https://your-app-name.onrender.com/' на URL твоего Render-приложения
+    bot.set_webhook(url='https://telegram-bot-btks.onrender.com/')
+
+    # Запускаем Flask сервер
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
