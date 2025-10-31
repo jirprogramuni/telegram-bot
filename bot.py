@@ -99,7 +99,7 @@ if __name__ == '__main__':
 
     # Устанавливаем новый webhook (для Render)
     # Замени 'https://your-app-name.onrender.com/' на URL твоего Render-приложения
-    bot.set_webhook(url='https://telegram-bot-btks.onrender.com/')
+    bot.set_webhook(url='https://telegram-bot-1-ydll.onrender.com')
 
     # Запускаем Flask сервер
     port = int(os.environ.get('PORT', 5000))
