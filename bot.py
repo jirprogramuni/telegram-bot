@@ -1,5 +1,5 @@
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import flask
 import os
 import logging
@@ -81,21 +81,46 @@ def get_salary_data(month_sheet, telegram_id):
         return None, None, None, None
 
 
+# Функция для генерации главного меню
+def get_main_menu_markup(registered):
+    markup = InlineKeyboardMarkup()
+    if not registered:
+        markup.add(InlineKeyboardButton("Зарегистрироваться ✅", callback_data="register"))
+    markup.add(InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"))
+    return markup
+
+
+# Функция для генерации меню месяцев
+def get_month_menu_markup():
+    markup = InlineKeyboardMarkup(row_width=3)
+    markup.add(
+        InlineKeyboardButton("Октябрь", callback_data="month_Октябрь"),
+        InlineKeyboardButton("Ноябрь", callback_data="month_Ноябрь"),
+        InlineKeyboardButton("Декабрь", callback_data="month_Декабрь")
+    )
+    markup.add(InlineKeyboardButton("Назад 🔙", callback_data="back_to_menu"))
+    return markup
+
+
+# Функция для генерации меню после показа зарплаты
+def get_back_menu_markup():
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("Назад 🔙", callback_data="back_to_menu"))
+    return markup
+
+
 # Обработчик /start
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
     registered, name = is_registered(user_id)
 
-    markup = InlineKeyboardMarkup()
-    if not registered:
-        markup.add(InlineKeyboardButton("Зарегистрироваться ✅", callback_data="register"))
-    markup.add(InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"))
-
     if registered:
         welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
     else:
         welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
+
+    markup = get_main_menu_markup(registered)
 
     bot.send_message(
         message.chat.id,
@@ -108,30 +133,73 @@ def start(message):
 # Обработчик нажатия кнопок
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
+    user_id = call.from_user.id
+    registered, name = is_registered(user_id)
+
     if call.data == "register":
-        user_states[call.from_user.id] = "waiting_for_name"
+        if registered:
+            bot.answer_callback_query(call.id, "Вы уже зарегистрированы!")
+            return
+        user_states[user_id] = "waiting_for_name"
         bot.answer_callback_query(call.id)
         bot.send_message(
-            call.from_user.id,
+            user_id,
             "*Введите ваше имя:* ✍️",
             parse_mode='Markdown'
         )
+
     elif call.data == "salary":
-        # Показываем клавиатуру для выбора месяца
-        markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-        markup.add(KeyboardButton("Октябрь"), KeyboardButton("Ноябрь"), KeyboardButton("Декабрь"))
-        # Добавь другие месяцы по необходимости
         bot.answer_callback_query(call.id)
-        bot.send_message(
-            call.from_user.id,
+        bot.edit_message_text(
             "*Выберите месяц для просмотра зарплаты:* 📅",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=get_month_menu_markup()
+        )
+
+    elif call.data.startswith("month_"):
+        month = call.data.split("_")[1]
+        bot.answer_callback_query(call.id)
+
+        name, first_advance, second_advance, total_salary = get_salary_data(month, user_id)
+
+        if name is None:
+            salary_msg = "*Данные не найдены для вашего ID в этом месяце.* 😔"
+        else:
+            salary_msg = f"*Ваша зарплата за {month}:* 💼\n\n" \
+                         f"Имя: {name}\n" \
+                         f"Первый аванс: {first_advance} руб.\n" \
+                         f"Второй аванс: {second_advance} руб.\n" \
+                         f"Итоговая з/п: {total_salary} руб."
+
+        bot.edit_message_text(
+            salary_msg,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=get_back_menu_markup()
+        )
+
+    elif call.data == "back_to_menu":
+        bot.answer_callback_query(call.id)
+        if registered:
+            welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
+        else:
+            welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
+
+        markup = get_main_menu_markup(registered)
+
+        bot.edit_message_text(
+            welcome_msg,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
             parse_mode='Markdown',
             reply_markup=markup
         )
-        user_states[call.from_user.id] = "waiting_for_month"
 
 
-# Обработчик текстовых сообщений
+# Обработчик текстовых сообщений (для регистрации)
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     user_id = message.from_user.id
@@ -143,7 +211,7 @@ def handle_text(message):
         # Отправляем ответ пользователю
         bot.send_message(
             user_id,
-            f"*Вы успешно зарегистрированы! 🎉*\n\nВаше имя: {name}",
+            f"*Вы успешно зарегистрированы! 🎉*\n\nВаше имя: {name}\n\nТеперь используйте /start для меню.",
             parse_mode='Markdown'
         )
         # Отправляем данные админу
@@ -155,30 +223,6 @@ def handle_text(message):
             )
         except Exception as e:
             logging.error(f"Ошибка отправки админу: {e}")
-        # Сбрасываем состояние
-        del user_states[user_id]
-
-    elif state == "waiting_for_month":
-        month = message.text.strip()
-        # Поддерживаемые месяцы (названия листов)
-        if month not in ["Октябрь", "Ноябрь", "Декабрь"]:  # Добавь другие
-            bot.send_message(user_id, "*Неверный месяц. Попробуйте снова.* ❌")
-            return
-
-        name, first_advance, second_advance, total_salary = get_salary_data(month, user_id)
-
-        if name is None:
-            bot.send_message(user_id, "*Данные не найдены для вашего ID в этом месяце.* 😔")
-        else:
-            bot.send_message(
-                user_id,
-                f"*Ваша зарплата за {month}:* 💼\n\n"
-                f"Имя: {name}\n"
-                f"Первый аванс: {first_advance} руб.\n"
-                f"Второй аванс: {second_advance} руб.\n"
-                f"Итоговая з/п: {total_salary} руб.",
-                parse_mode='Markdown'
-            )
         # Сбрасываем состояние
         del user_states[user_id]
 
