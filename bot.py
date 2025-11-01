@@ -20,11 +20,35 @@ bot = telebot.TeleBot(BOT_TOKEN)
 # Словарь для хранения состояний пользователей
 user_states = {}
 
-# URL для экспорта Google Sheets в формате XLSX (таблица должна быть доступна по ссылке)
+# URL для экспорта Google Sheets в формате XLSX
 EXCEL_URL = 'https://docs.google.com/spreadsheets/d/1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg/export?format=xlsx'
 
 
-# Функция для чтения данных из Google Sheets по месяцу и Telegram ID
+# Функция для проверки регистрации пользователя
+def is_registered(user_id):
+    try:
+        response = requests.get(EXCEL_URL)
+        if response.status_code != 200:
+            logging.error(f"Ошибка загрузки файла: {response.status_code}")
+            return False, None
+
+        file_like = io.BytesIO(response.content)
+        df = pd.read_excel(file_like, sheet_name="Список сотрудников", engine='openpyxl')
+
+        # Ищем строку по Telegram ID (столбец B, индекс 1)
+        row = df[df.iloc[:, 1] == user_id]
+
+        if row.empty:
+            return False, None
+
+        name = row.iloc[0, 0]  # Столбец A - имя
+        return True, name
+    except Exception as e:
+        logging.error(f"Ошибка проверки регистрации: {e}")
+        return False, None
+
+
+# Функция для чтения данных о зарплате
 def get_salary_data(month_sheet, telegram_id):
     try:
         response = requests.get(EXCEL_URL)
@@ -42,7 +66,6 @@ def get_salary_data(month_sheet, telegram_id):
             return None, None, None, None
 
         name = row.iloc[0, 0]  # Столбец A - имя
-        # Столбцы по именам
         columns = df.columns
         first_advance_col = columns.get_loc('Депозит 1') if 'Депозит 1' in columns else None
         second_advance_col = columns.get_loc('Депозит 2') if 'Депозит 2' in columns else None
@@ -61,12 +84,22 @@ def get_salary_data(month_sheet, telegram_id):
 # Обработчик /start
 @bot.message_handler(commands=['start'])
 def start(message):
+    user_id = message.from_user.id
+    registered, name = is_registered(user_id)
+
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("Зарегистрироваться ✅", callback_data="register"))
+    if not registered:
+        markup.add(InlineKeyboardButton("Зарегистрироваться ✅", callback_data="register"))
     markup.add(InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"))
+
+    if registered:
+        welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
+    else:
+        welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
+
     bot.send_message(
         message.chat.id,
-        "*Добро пожаловать!*\n\nВыберите действие ниже. 😊",
+        welcome_msg,
         parse_mode='Markdown',
         reply_markup=markup
     )
