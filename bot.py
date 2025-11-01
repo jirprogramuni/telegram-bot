@@ -102,13 +102,6 @@ def get_month_menu_markup():
     return markup
 
 
-# Функция для генерации меню после показа зарплаты
-def get_back_menu_markup():
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("Назад 🔙", callback_data="back_to_menu"))
-    return markup
-
-
 # Обработчик /start
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -173,12 +166,26 @@ def callback_query(call):
                          f"Второй аванс: {second_advance} руб.\n" \
                          f"Итоговая з/п: {total_salary} руб."
 
-        bot.edit_message_text(
+        bot.send_message(
+            call.message.chat.id,
             salary_msg,
+            parse_mode='Markdown'
+        )
+
+        # Reset the menu message back to main
+        if registered:
+            welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
+        else:
+            welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
+
+        markup = get_main_menu_markup(registered)
+
+        bot.edit_message_text(
+            welcome_msg,
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             parse_mode='Markdown',
-            reply_markup=get_back_menu_markup()
+            reply_markup=markup
         )
 
     elif call.data == "back_to_menu":
