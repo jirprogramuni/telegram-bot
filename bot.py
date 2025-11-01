@@ -91,7 +91,8 @@ def get_main_menu_markup(registered):
     markup = InlineKeyboardMarkup()
     if not registered:
         markup.add(InlineKeyboardButton("Зарегистрироваться ✅", callback_data="register"))
-    markup.add(InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"))
+    else:
+        markup.add(InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"))
     return markup
 
 
@@ -147,6 +148,9 @@ def callback_query(call):
         )
 
     elif call.data == "salary":
+        if not registered:
+            bot.answer_callback_query(call.id, "Вы не зарегистрированы! Сначала зарегистрируйтесь.")
+            return
         bot.answer_callback_query(call.id)
         bot.edit_message_text(
             "*Выберите месяц для просмотра зарплаты:* 📅",
@@ -166,14 +170,14 @@ def callback_query(call):
         if name is None:
             salary_msg = "*Данные не найдены для вашего ID в этом месяце.* 😔"
         else:
-            salary_msg = f"**Ваша зарплата за {month}:** 💼\n\n" \
-                         f"**Имя:** {name} 👤\n\n" \
-                         f"**Отработано часов за 1 половину:** {hours_first} ⏰\n" \
-                         f"**Отработано часов за 2 половину:** {hours_second} ⏰\n" \
-                         f"**Всего часов:** {total_hours} ⏱️🔥\n\n" \
-                         f"**Первый аванс:** {first_advance} руб. 💰\n" \
-                         f"**Второй аванс:** {second_advance} руб. 💰\n" \
-                         f"**Итоговая з/п:** {total_salary} руб. 💵🎉"
+            salary_msg = f"*Ваша зарплата за {month}:** 💼\n\n" \
+                         f"*Имя:** {name} 👤\n\n" \
+                         f"*Отработано часов за 1 половину:* {hours_first} ⏰\n" \
+                         f"*Отработано часов за 2 половину:* {hours_second} ⏰\n" \
+                         f"*Всего часов:* {total_hours} ⏱️🔥\n\n" \
+                         f"*Первый аванс:* {first_advance} руб. 💰\n" \
+                         f"*Второй аванс:* {second_advance} руб. 💰\n" \
+                         f"*Итоговая з/п:* {total_salary} руб. 💵🎉"
 
         bot.send_message(
             call.message.chat.id,
