@@ -194,14 +194,14 @@ def callback_query(call):
         if name is None:
             salary_msg = "*Данные не найдены для вашего ID в этом месяце.* 😔"
         else:
-            salary_msg = f"*Ваша зарплата за {month}:* 💼\n\n" \
-                         f"*Имя:* {name} 👤\n\n" \
-                         f"*Отработано часов за 1 половину:* {hours_first} ⏰\n" \
-                         f"*Отработано часов за 2 половину:* {hours_second} ⏰\n" \
-                         f"*Всего часов:* {total_hours} ⏱️🔥\n\n" \
-                         f"*Первый аванс:* {first_advance} руб. 💰\n" \
-                         f"*Второй аванс:* {second_advance} руб. 💰\n" \
-                         f"*Итоговая з/п:* {total_salary} руб. 💵🎉"
+            salary_msg = f"**Ваша зарплата за {month}:** 💼\n\n" \
+                         f"**Имя:** {name} 👤\n\n" \
+                         f"**Отработано часов за 1 половину:** {hours_first} ⏰\n" \
+                         f"**Отработано часов за 2 половину:** {hours_second} ⏰\n" \
+                         f"**Всего часов:** {total_hours} ⏱️🔥\n\n" \
+                         f"**Первый аванс:** {first_advance} руб. 💰\n" \
+                         f"**Второй аванс:** {second_advance} руб. 💰\n" \
+                         f"**Итоговая з/п:** {total_salary} руб. 💵🎉"
 
         bot.send_message(
             call.message.chat.id,
@@ -267,6 +267,27 @@ def callback_query(call):
         else:
             bot.answer_callback_query(call.id, "Пользователь не найден!")
 
+    elif call.data.startswith("reject_"):
+        if user_id != ADMIN_ID:
+            bot.answer_callback_query(call.id, "Только админ может отклонять!")
+            return
+        reject_user_id = int(call.data.split("_")[1])
+        if reject_user_id in pending_users:
+            bot.answer_callback_query(call.id, "Отклонено!")
+            bot.edit_message_reply_markup(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=None  # Удаляем кнопки
+            )
+            bot.send_message(
+                reject_user_id,
+                "*Ваша регистрация отклонена админом. 😔*\n\nПопробуйте снова или свяжитесь с поддержкой.",
+                parse_mode='Markdown'
+            )
+            del pending_users[reject_user_id]
+        else:
+            bot.answer_callback_query(call.id, "Пользователь не найден!")
+
 
 # Обработчик текстовых сообщений (для регистрации)
 @bot.message_handler(func=lambda message: True)
@@ -285,9 +306,12 @@ def handle_text(message):
             f"*Заявка на регистрацию отправлена! 🎉*\n\nВаше имя: {name}\nОжидайте подтверждения от админа.",
             parse_mode='Markdown'
         )
-        # Отправляем админу с кнопкой
+        # Отправляем админу с кнопками
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("Подтвердить ✅", callback_data=f"confirm_{user_id}"))
+        markup.add(
+            InlineKeyboardButton("Подтвердить ✅", callback_data=f"confirm_{user_id}"),
+            InlineKeyboardButton("Отклонить ❌", callback_data=f"reject_{user_id}")
+        )
         try:
             bot.send_message(
                 ADMIN_ID,
