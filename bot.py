@@ -7,6 +7,8 @@ import pandas as pd
 from datetime import datetime
 import requests
 import io
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -20,8 +22,19 @@ bot = telebot.TeleBot(BOT_TOKEN)
 # Словарь для хранения состояний пользователей
 user_states = {}
 
-# URL для экспорта Google Sheets в формате XLSX
+# Словарь для pending регистраций
+pending_users = {}  # {user_id: name}
+
+# URL для экспорта Google Sheets в формате XLSX (для чтения)
 EXCEL_URL = 'https://docs.google.com/spreadsheets/d/1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg/export?format=xlsx'
+
+# Для записи в Google Sheets (нужны credentials.json, загрузи на Render)
+SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+CREDS_FILE = 'credentials.json'  # Загрузи service account JSON
+creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
+client = gspread.authorize(creds)
+SHEET_ID = '1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg'  # ID таблицы
+sheet = client.open_by_key(SHEET_ID)
 
 
 # Функция для проверки регистрации пользователя
@@ -46,6 +59,17 @@ def is_registered(user_id):
     except Exception as e:
         logging.error(f"Ошибка проверки регистрации: {e}")
         return False, None
+
+
+# Функция для добавления в sheet
+def add_to_sheet(name, user_id):
+    try:
+        worksheet = sheet.worksheet("Список сотрудников")
+        worksheet.append_row([name, user_id])
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка добавления в sheet: {e}")
+        return False
 
 
 # Функция для чтения данных о зарплате и часах
@@ -170,8 +194,8 @@ def callback_query(call):
         if name is None:
             salary_msg = "*Данные не найдены для вашего ID в этом месяце.* 😔"
         else:
-            salary_msg = f"*Ваша зарплата за {month}:** 💼\n\n" \
-                         f"*Имя:** {name} 👤\n\n" \
+            salary_msg = f"*Ваша зарплата за {month}:* 💼\n\n" \
+                         f"*Имя:* {name} 👤\n\n" \
                          f"*Отработано часов за 1 половину:* {hours_first} ⏰\n" \
                          f"*Отработано часов за 2 половину:* {hours_second} ⏰\n" \
                          f"*Всего часов:* {total_hours} ⏱️🔥\n\n" \
@@ -218,6 +242,31 @@ def callback_query(call):
             reply_markup=markup
         )
 
+    elif call.data.startswith("confirm_"):
+        if user_id != ADMIN_ID:
+            bot.answer_callback_query(call.id, "Только админ может подтверждать!")
+            return
+        confirm_user_id = int(call.data.split("_")[1])
+        confirm_name = pending_users.get(confirm_user_id)
+        if confirm_name:
+            if add_to_sheet(confirm_name, confirm_user_id):
+                bot.answer_callback_query(call.id, "Подтверждено!")
+                bot.edit_message_reply_markup(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    reply_markup=None  # Удаляем кнопку
+                )
+                bot.send_message(
+                    confirm_user_id,
+                    "*Ваша регистрация подтверждена! 🎉*\n\nТеперь вы можете использовать меню. Используйте /start.",
+                    parse_mode='Markdown'
+                )
+                del pending_users[confirm_user_id]
+            else:
+                bot.answer_callback_query(call.id, "Ошибка добавления в таблицу!")
+        else:
+            bot.answer_callback_query(call.id, "Пользователь не найден!")
+
 
 # Обработчик текстовых сообщений (для регистрации)
 @bot.message_handler(func=lambda message: True)
@@ -228,18 +277,23 @@ def handle_text(message):
     if state == "waiting_for_name":
         name = message.text.strip()
         username = message.from_user.username or "Не указан"
-        # Отправляем ответ пользователю
+        # Сохраняем pending
+        pending_users[user_id] = name
+        # Отправляем пользователю
         bot.send_message(
             user_id,
-            f"*Вы успешно зарегистрированы! 🎉*\n\nВаше имя: {name}\n\n. Ожидайте подтверждения регистрации! 😊",
+            f"*Заявка на регистрацию отправлена! 🎉*\n\nВаше имя: {name}\nОжидайте подтверждения от админа.",
             parse_mode='Markdown'
         )
-        # Отправляем данные админу
+        # Отправляем админу с кнопкой
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("Подтвердить ✅", callback_data=f"confirm_{user_id}"))
         try:
             bot.send_message(
                 ADMIN_ID,
                 f"*Новая регистрация! 📋*\n\nИмя: {name}\nUsername: @{username}\nID: {user_id}",
-                parse_mode='Markdown'
+                parse_mode='Markdown',
+                reply_markup=markup
             )
         except Exception as e:
             logging.error(f"Ошибка отправки админу: {e}")
