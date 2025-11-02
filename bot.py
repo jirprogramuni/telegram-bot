@@ -4,7 +4,7 @@ import flask
 import os
 import logging
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import io
 import gspread
@@ -27,6 +27,7 @@ pending_users = {}  # {user_id: name}
 
 # URL для экспорта Google Sheets в формате XLSX (для чтения)
 EXCEL_URL = 'https://docs.google.com/spreadsheets/d/1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg/export?format=xlsx'
+TABEL_URL = 'https://docs.google.com/spreadsheets/d/1q6Rqx3ypWYZAD74MdH-iz-tN5aAANrnDglLysvHg9_8/export?format=xlsx'
 
 # Для записи в Google Sheets (нужны credentials.json, загрузи на Render)
 SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -110,13 +111,82 @@ def get_salary_data(month_sheet, telegram_id):
         return None, None, None, None, None, None, None
 
 
+# Функция для получения данных о табеле
+def get_tabel_data(user_name, month_sheet):
+    try:
+        response = requests.get(TABEL_URL)
+        if response.status_code != 200:
+            logging.error(f"Ошибка загрузки табеля: {response.status_code}")
+            return []
+
+        file_like = io.BytesIO(response.content)
+        df = pd.read_excel(file_like, sheet_name=month_sheet, engine='openpyxl', header=None)  # Без заголовков, т.к. первая строка - header
+
+        # Определяем точки: ассоциируем каждый столбец с точкой
+        header = df.iloc[0]
+        points = {}
+        current_point = None
+        for col in range(2, df.shape[1]):
+            if pd.notna(header[col]):
+                current_point = header[col]
+            if current_point:
+                points[col] = current_point
+
+        # Словарь для родительного падежа месяцев
+        month_genitive = {
+            'Январь': 'января',
+            'Февраль': 'февраля',
+            'Март': 'марта',
+            'Апрель': 'апреля',
+            'Май': 'мая',
+            'Июнь': 'июня',
+            'Июль': 'июля',
+            'Август': 'августа',
+            'Сентябрь': 'сентября',
+            'Октябрь': 'октября',
+            'Ноябрь': 'ноября',
+            'Декабрь': 'декабря'
+        }
+
+        base = datetime(1899, 12, 30)  # База для Excel дат (Windows версия)
+        shifts = []
+        for row in range(1, df.shape[0]):
+            day_abbr = df.iloc[row, 0]
+            if pd.isna(day_abbr):
+                continue
+            serial = df.iloc[row, 1]
+            if pd.isna(serial):
+                continue
+            try:
+                serial = int(serial)
+                date = base + timedelta(days=serial)
+            except ValueError:
+                continue
+
+            for col in range(2, df.shape[1]):
+                cell = df.iloc[row, col]
+                if isinstance(cell, str) and user_name in cell:  # Проверяем наличие имени (на случай с ролью)
+                    point = points.get(col)
+                    if point:
+                        shift_str = f"{day_abbr}, {date.day} {month_genitive.get(month_sheet, month_sheet.lower())}: {point}"
+                        shifts.append(shift_str)
+
+        return shifts
+    except Exception as e:
+        logging.error(f"Ошибка чтения табеля: {e}")
+        return []
+
+
 # Функция для генерации главного меню
 def get_main_menu_markup(registered):
-    markup = InlineKeyboardMarkup()
+    markup = InlineKeyboardMarkup(row_width=2)
     if not registered:
         markup.add(InlineKeyboardButton("Зарегистрироваться ✅", callback_data="register"))
     else:
-        markup.add(InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"))
+        markup.add(
+            InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"),
+            InlineKeyboardButton("Мой табель 📅", callback_data="tabel")
+        )
     return markup
 
 
@@ -182,6 +252,45 @@ def callback_query(call):
             message_id=call.message.message_id,
             parse_mode='Markdown',
             reply_markup=get_month_menu_markup()
+        )
+
+    elif call.data == "tabel":
+        if not registered:
+            bot.answer_callback_query(call.id, "Вы не зарегистрированы! Сначала зарегистрируйтесь.")
+            return
+        bot.answer_callback_query(call.id)
+
+        # Определяем текущий месяц
+        month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+        current_month = month_names[datetime.now().month - 1]
+
+        shifts = get_tabel_data(name, current_month)
+
+        if not shifts:
+            tabel_msg = f"*Нет смен в {current_month.lower()}.* 😔"
+        else:
+            tabel_msg = f"**Ваши смены за {current_month}:** 📅\n\n" + "\n".join([f"- {shift}" for shift in shifts])
+
+        bot.send_message(
+            call.message.chat.id,
+            tabel_msg,
+            parse_mode='Markdown'
+        )
+
+        # Reset the menu message back to main
+        if registered:
+            welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
+        else:
+            welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
+
+        markup = get_main_menu_markup(registered)
+
+        bot.edit_message_text(
+            welcome_msg,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=markup
         )
 
     elif call.data.startswith("month_"):
