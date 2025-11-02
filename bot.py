@@ -9,6 +9,7 @@ import requests
 import io
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -180,6 +181,97 @@ def get_tabel_data(user_name, month_sheet):
     except Exception as e:
         logging.error(f"Ошибка чтения табеля: {e}")
         return []
+
+
+# Функция для отправки напоминаний
+def send_reminders():
+    try:
+        # Загрузка списка сотрудников
+        response = requests.get(EXCEL_URL)
+        if response.status_code != 200:
+            logging.error(f"Ошибка загрузки списка сотрудников: {response.status_code}")
+            return
+
+        file_like = io.BytesIO(response.content)
+        df_emp = pd.read_excel(file_like, sheet_name="Список сотрудников", engine='openpyxl')
+
+        name_to_id = {}
+        for i in range(len(df_emp)):
+            name = str(df_emp.iloc[i, 0]).strip()
+            tid = df_emp.iloc[i, 1]
+            if pd.notna(tid):
+                name_to_id[name] = int(tid)
+
+        # Определение завтрашней даты
+        now = datetime.now()
+        tomorrow = now + timedelta(days=1)
+        month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+        month_sheet = month_names[tomorrow.month - 1]
+
+        # Словарь для родительного падежа месяцев
+        month_genitive = {
+            'Январь': 'января',
+            'Февраль': 'февраля',
+            'Март': 'марта',
+            'Апрель': 'апреля',
+            'Май': 'мая',
+            'Июнь': 'июня',
+            'Июль': 'июля',
+            'Август': 'августа',
+            'Сентябрь': 'сентября',
+            'Октябрь': 'октября',
+            'Ноябрь': 'ноября',
+            'Декабрь': 'декабря'
+        }
+
+        base = datetime(1899, 12, 30)
+        serial_tomorrow = (tomorrow - base).days
+
+        # Загрузка табеля
+        response = requests.get(TABEL_URL)
+        if response.status_code != 200:
+            logging.error(f"Ошибка загрузки табеля: {response.status_code}")
+            return
+
+        file_like = io.BytesIO(response.content)
+        df_tabel = pd.read_excel(file_like, sheet_name=month_sheet, engine='openpyxl', header=None, parse_dates=False)
+
+        # Определяем точки
+        header = df_tabel.iloc[0]
+        points = {}
+        current_point = None
+        for col in range(2, df_tabel.shape[1]):
+            if pd.notna(header[col]):
+                current_point = header[col]
+            if current_point:
+                points[col] = current_point
+
+        # Находим строку для завтрашнего дня
+        shift_row = None
+        for r in range(1, df_tabel.shape[0]):
+            s = df_tabel.iloc[r, 1]
+            if isinstance(s, (int, float)) and int(s) == serial_tomorrow:
+                shift_row = r
+                break
+
+        if shift_row is None:
+            logging.info("Нет смен на завтра")
+            return
+
+        # Извлекаем имена и точки
+        for col in range(2, df_tabel.shape[1]):
+            cell = df_tabel.iloc[shift_row, col]
+            if isinstance(cell, str) and cell.strip():
+                name = cell.strip()
+                point = points.get(col, "Неизвестно")
+                tid = name_to_id.get(name)
+                if tid:
+                    msg = f"*Напоминание:* завтра ({tomorrow.day} {month_genitive.get(month_sheet, month_sheet.lower())}) у вас смена в {point}. 📅"
+                    bot.send_message(tid, msg, parse_mode='Markdown')
+                else:
+                    logging.error(f"Нет ID для имени: {name}")
+    except Exception as e:
+        logging.error(f"Ошибка в отправке напоминаний: {e}")
 
 
 # Функция для генерации главного меню
@@ -457,7 +549,7 @@ def handle_text(message):
         except Exception as e:
             logging.error(f"Ошибка отправки админу: {e}")
         # Сбрасываем состояние
-        del user_states[user_id] 
+        del user_states[user_id]
 
 
 # Для webhook на Render
@@ -485,6 +577,12 @@ if __name__ == '__main__':
     bot.remove_webhook()
     # Устанавливаем новый webhook (для Render)
     bot.set_webhook(url='https://telegram-bot-1-ydll.onrender.com')  # Замени на свой URL Render
+
+    # Запускаем scheduler для напоминаний
+    scheduler = BackgroundScheduler(timezone="Europe/Moscow")  # Укажите нужный timezone
+    scheduler.add_job(send_reminders, 'cron', hour=20, minute=0)
+    scheduler.start()
+
     # Запускаем Flask сервер
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
