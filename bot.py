@@ -333,16 +333,17 @@ def handle_text(message):
             InlineKeyboardButton("Отклонить ❌", callback_data=f"reject_{user_id}")
         )
         try:
+            # Используем send_message с reply_markup
             bot.send_message(
                 ADMIN_ID,
                 f"*Новая регистрация! 📋*\n\nИмя: {name}\nUsername: @{username}\nID: {user_id}",
                 parse_mode='Markdown',
-                reply_markup=markup
+                reply_markup=markup  # <-- Убедись, что reply_markup передан правильно
             )
         except Exception as e:
             logging.error(f"Ошибка отправки админу: {e}")
         # Сбрасываем состояние
-        del user_states[user_id]
+        del user_states[user_id] 
 
 
 # Для webhook на Render
