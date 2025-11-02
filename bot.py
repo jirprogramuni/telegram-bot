@@ -61,7 +61,7 @@ def is_registered(user_id):
         return False, None
 
 
-# Функция для добавления в sheet
+# Функция для добавления в sheet (оставляем, но не используем в confirm, чтобы админ добавлял вручную)
 def add_to_sheet(name, user_id):
     try:
         worksheet = sheet.worksheet("Список сотрудников")
@@ -249,21 +249,41 @@ def callback_query(call):
         confirm_user_id = int(call.data.split("_")[1])
         confirm_name = pending_users.get(confirm_user_id)
         if confirm_name:
-            if add_to_sheet(confirm_name, confirm_user_id):
-                bot.answer_callback_query(call.id, "Подтверждено!")
-                bot.edit_message_reply_markup(
-                    chat_id=call.message.chat.id,
-                    message_id=call.message.message_id,
-                    reply_markup=None  # Удаляем кнопку
+            # Предполагаем, что админ уже добавил в Sheets вручную — не добавляем автоматически
+            bot.answer_callback_query(call.id, "Подтверждено!")
+            bot.edit_message_reply_markup(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=None  # Удаляем кнопки
+            )
+
+            # Проверяем регистрацию (должна быть True, если админ добавил)
+            registered, name = is_registered(confirm_user_id)
+            if registered:
+                welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
+                markup = get_main_menu_markup(registered=True)  # Меню с "Узнать зарплату"
+
+                bot.send_message(
+                    confirm_user_id,
+                    "*Ваша регистрация подтверждена! 🎉*",
+                    parse_mode='Markdown'
                 )
                 bot.send_message(
                     confirm_user_id,
-                    "*Ваша регистрация подтверждена! 🎉*\n\nТеперь вы можете использовать меню. Используйте /start.",
+                    welcome_msg,
+                    parse_mode='Markdown',
+                    reply_markup=markup
+                )
+            else:
+                # Если админ забыл добавить в Sheets
+                bot.send_message(
+                    confirm_user_id,
+                    "*Регистрация подтверждена, но данные не найдены. Свяжитесь с админом.* 😔",
                     parse_mode='Markdown'
                 )
-                del pending_users[confirm_user_id]
-            else:
-                bot.answer_callback_query(call.id, "Ошибка добавления в таблицу!")
+                bot.answer_callback_query(call.id, "Пользователь не в Sheets — добавьте вручную!")
+
+            del pending_users[confirm_user_id]
         else:
             bot.answer_callback_query(call.id, "Пользователь не найден!")
 
