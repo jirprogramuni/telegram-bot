@@ -3,3 +3,4 @@ pytelegrambotapi
 pandas
 openpyxl
 requests
+gspread
