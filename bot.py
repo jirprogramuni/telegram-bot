@@ -120,7 +120,7 @@ def get_tabel_data(user_name, month_sheet):
             return []
 
         file_like = io.BytesIO(response.content)
-        df = pd.read_excel(file_like, sheet_name=month_sheet, engine='openpyxl', header=None)  # Без заголовков, т.к. первая строка - header
+        df = pd.read_excel(file_like, sheet_name=month_sheet, engine='openpyxl', header=None, parse_dates=False)  # Добавили parse_dates=False
 
         # Определяем точки: ассоциируем каждый столбец с точкой
         header = df.iloc[0]
@@ -150,21 +150,26 @@ def get_tabel_data(user_name, month_sheet):
 
         base = datetime(1899, 12, 30)  # База для Excel дат (Windows версия)
         shifts = []
-        for row in range(1, df.shape[0]):
-            day_abbr = df.iloc[row, 0]
+        for row_idx in range(1, df.shape[0]):  # Переименовали row в row_idx для ясности
+            day_abbr = df.iloc[row_idx, 0]
             if pd.isna(day_abbr):
                 continue
-            serial = df.iloc[row, 1]
+            serial = df.iloc[row_idx, 1]
             if pd.isna(serial):
                 continue
-            try:
-                serial = int(serial)
-                date = base + timedelta(days=serial)
-            except ValueError:
-                continue
+
+            # Обработка serial: если datetime, конвертируем в дату напрямую
+            if isinstance(serial, datetime):
+                date = serial
+            else:
+                try:
+                    serial = float(serial)  # На случай, если это float
+                    date = base + timedelta(days=serial)
+                except (ValueError, TypeError):
+                    continue
 
             for col in range(2, df.shape[1]):
-                cell = df.iloc[row, col]
+                cell = df.iloc[row_idx, col]
                 if isinstance(cell, str) and user_name in cell:  # Проверяем наличие имени (на случай с ролью)
                     point = points.get(col)
                     if point:
