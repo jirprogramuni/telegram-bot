@@ -28,13 +28,7 @@ pending_users = {}  # {user_id: name}
 # URL для экспорта Google Sheets в формате XLSX (для чтения)
 EXCEL_URL = 'https://docs.google.com/spreadsheets/d/1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg/export?format=xlsx'
 
-# Для записи в Google Sheets (нужны credentials.json, загрузи на Render)
-SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-CREDS_FILE = 'credentials.json'  # Загрузи service account JSON
-creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
-client = gspread.authorize(creds)
-SHEET_ID = '1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg'  # ID таблицы
-sheet = client.open_by_key(SHEET_ID)
+
 
 
 # Функция для проверки регистрации пользователя
