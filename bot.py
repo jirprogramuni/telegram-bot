@@ -202,11 +202,11 @@ def send_reminders():
             if pd.notna(tid):
                 name_to_id[name] = int(tid)
 
-        # Определение завтрашней даты
+        # Определение сегодняшней даты
         now = datetime.now()
-        tomorrow = now + timedelta(days=1)
+        today = now
         month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
-        month_sheet = month_names[tomorrow.month - 1]
+        month_sheet = month_names[today.month - 1]
 
         # Словарь для родительного падежа месяцев
         month_genitive = {
@@ -225,7 +225,7 @@ def send_reminders():
         }
 
         base = datetime(1899, 12, 30)
-        serial_tomorrow = (tomorrow - base).days
+        serial_today = (today - base).days
 
         # Загрузка табеля
         response = requests.get(TABEL_URL)
@@ -246,16 +246,16 @@ def send_reminders():
             if current_point:
                 points[col] = current_point
 
-        # Находим строку для завтрашнего дня
+        # Находим строку для сегодняшнего дня
         shift_row = None
         for r in range(1, df_tabel.shape[0]):
             s = df_tabel.iloc[r, 1]
-            if isinstance(s, (int, float)) and int(s) == serial_tomorrow:
+            if isinstance(s, (int, float)) and int(s) == serial_today:
                 shift_row = r
                 break
 
         if shift_row is None:
-            logging.info("Нет смен на завтра")
+            logging.info("Нет смен на сегодня")
             return
 
         # Извлекаем имена и точки
@@ -266,7 +266,7 @@ def send_reminders():
                 point = points.get(col, "Неизвестно")
                 tid = name_to_id.get(name)
                 if tid:
-                    msg = f"*Напоминание:* завтра ({tomorrow.day} {month_genitive.get(month_sheet, month_sheet.lower())}) у вас смена в {point}. 📅"
+                    msg = f"*Напоминание:* сегодня ({today.day} {month_genitive.get(month_sheet, month_sheet.lower())}) у вас смена в {point}. 📅"
                     bot.send_message(tid, msg, parse_mode='Markdown')
                 else:
                     logging.error(f"Нет ID для имени: {name}")
@@ -580,7 +580,7 @@ if __name__ == '__main__':
 
     # Запускаем scheduler для напоминаний
     scheduler = BackgroundScheduler(timezone="Europe/Moscow")  # Укажите нужный timezone
-    scheduler.add_job(send_reminders, 'cron', hour=20, minute=0)
+    scheduler.add_job(send_reminders, 'cron', hour=2, minute=10)
     scheduler.start()
 
     # Запускаем Flask сервер
