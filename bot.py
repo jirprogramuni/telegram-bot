@@ -12,118 +12,126 @@ from oauth2client.service_account import ServiceAccountCredentials
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Токен бота и ID админа
-BOT_TOKEN = '7478861606:AAF-7eV0XjTn7S_6Q_caIk7Y27kGsfU_f-A'  # Замени на свой токен
-ADMIN_ID = 476747112  # Замени на свой user ID (число)
-
+BOT_TOKEN = '7478861606:AAF-7eV0XjTn7S_6Q_caIk7Y27kGsfU_f-A'
+ADMIN_ID = 476747112
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Словарь для хранения состояний пользователей
-user_states = {}
+# Глобальные кэши
+user_cache = {}  # user_id -> (registered, name, timestamp)
+salary_cache = {}  # (user_id, month) -> data
+CACHE_TTL = 300  # 5 минут
 
-# Словарь для pending регистраций
-pending_users = {}  # {user_id: name}
-
-# URL для экспорта Google Sheets в формате XLSX (для чтения)
+# URL для экспорта
 EXCEL_URL = 'https://docs.google.com/spreadsheets/d/1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg/export?format=xlsx'
 TABEL_URL = 'https://docs.google.com/spreadsheets/d/1q6Rqx3ypWYZAD74MdH-iz-tN5aAANrnDglLysvHg9_8/export?format=xlsx'
 
-# Для записи в Google Sheets (нужны credentials.json, загрузи на Render)
+# Google Sheets API
 SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-CREDS_FILE = 'credentials.json'  # Загрузи service account JSON
+CREDS_FILE = 'credentials.json'
 creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
 client = gspread.authorize(creds)
-SHEET_ID = '1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg'  # ID таблицы
+SHEET_ID = '1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg'
 sheet = client.open_by_key(SHEET_ID)
 
+# Словарь состояний
+user_states = {}
+pending_users = {}
 
-# Функция для проверки регистрации пользователя
+# Путь к фото
+photo_path = 'photo_2025-10-28_01-49-34.jpg'
+
+
+# === КЭШИРОВАННАЯ ПРОВЕРКА РЕГИСТРАЦИИ ===
 def is_registered(user_id):
+    now = datetime.now().timestamp()
+    if user_id in user_cache:
+        registered, name, ts = user_cache[user_id]
+        if now - ts < CACHE_TTL:
+            logging.info(f"КЭШ: is_registered({user_id}) -> {registered}, {name}")
+            return registered, name
+
+    logging.info(f"Запрос к Google Sheets: проверка is_registered({user_id})")
     try:
-        response = requests.get(EXCEL_URL)
+        response = requests.get(EXCEL_URL, timeout=10)
         if response.status_code != 200:
             logging.error(f"Ошибка загрузки файла: {response.status_code}")
+            user_cache[user_id] = (False, None, now)
             return False, None
 
         file_like = io.BytesIO(response.content)
         df = pd.read_excel(file_like, sheet_name="Список сотрудников", engine='openpyxl')
-
-        # Ищем строку по Telegram ID (столбец B, индекс 1)
         row = df[df.iloc[:, 1] == user_id]
-
         if row.empty:
+            user_cache[user_id] = (False, None, now)
             return False, None
 
-        name = row.iloc[0, 0]  # Столбец A - имя
+        name = str(row.iloc[0, 0]).strip()
+        user_cache[user_id] = (True, name, now)
+        logging.info(f"Успешно: {user_id} -> {name}")
         return True, name
+
+    except requests.exceptions.Timeout:
+        logging.error("Таймаут при проверке регистрации")
     except Exception as e:
-        logging.error(f"Ошибка проверки регистрации: {e}")
-        return False, None
+        logging.error(f"Ошибка is_registered: {e}")
+    user_cache[user_id] = (False, None, now)
+    return False, None
 
 
-# Функция для добавления в sheet (оставляем, но не используем в confirm, чтобы админ добавлял вручную)
-def add_to_sheet(name, user_id):
-    try:
-        worksheet = sheet.worksheet("Список сотрудников")
-        worksheet.append_row([name, user_id])
-        return True
-    except Exception as e:
-        logging.error(f"Ошибка добавления в sheet: {e}")
-        return False
-
-
-# Функция для чтения данных о зарплате и часах
+# === КЭШИРОВАННЫЕ ДАННЫЕ ЗАРПЛАТЫ ===
 def get_salary_data(month_sheet, telegram_id):
+    cache_key = (telegram_id, month_sheet)
+    now = datetime.now().timestamp()
+    if cache_key in salary_cache:
+        data, ts = salary_cache[cache_key]
+        if now - ts < CACHE_TTL:
+            return data
+
+    logging.info(f"Запрос зарплаты: {month_sheet} для {telegram_id}")
     try:
-        response = requests.get(EXCEL_URL)
+        response = requests.get(EXCEL_URL, timeout=10)
         if response.status_code != 200:
-            logging.error(f"Ошибка загрузки файла: {response.status_code}")
-            return None, None, None, None, None, None, None
+            return (None,) * 7
 
         file_like = io.BytesIO(response.content)
         df = pd.read_excel(file_like, sheet_name=month_sheet, engine='openpyxl')
-
-        # Ищем строку по Telegram ID (столбец B, индекс 1)
         row = df[df.iloc[:, 1] == telegram_id]
-
         if row.empty:
-            return None, None, None, None, None, None, None
+            salary_cache[cache_key] = ((None,) * 7, now)
+            return (None,) * 7
 
-        name = row.iloc[0, 0]  # Столбец A - имя
-        columns = df.columns
-        hours_first_col = columns.get_loc('Общие часы 1 половина') if 'Общие часы 1 половина' in columns else None
-        hours_second_col = columns.get_loc('Общие часы 2 половина') if 'Общие часы 2 половина' in columns else None
-        first_advance_col = columns.get_loc('Депозит 1') if 'Депозит 1' in columns else None
-        second_advance_col = columns.get_loc('Депозит 2') if 'Депозит 2' in columns else None
-        total_salary_col = columns.get_loc('Итоговая з/п') if 'Итоговая з/п' in columns else None
-
-        hours_first = row.iloc[0, hours_first_col] if hours_first_col is not None else 0
-        hours_second = row.iloc[0, hours_second_col] if hours_second_col is not None else 0
+        name = str(row.iloc[0, 0]).strip()
+        cols = df.columns
+        hours_first = row.iloc[0, cols.get_loc('Общие часы 1 половина')] if 'Общие часы 1 половина' in cols else 0
+        hours_second = row.iloc[0, cols.get_loc('Общие часы 2 половина')] if 'Общие часы 2 половина' in cols else 0
         total_hours = hours_first + hours_second
-        first_advance = row.iloc[0, first_advance_col] if first_advance_col is not None else 0
-        second_advance = row.iloc[0, second_advance_col] if second_advance_col is not None else 0
-        total_salary = row.iloc[0, total_salary_col] if total_salary_col is not None else 0
+        first_advance = row.iloc[0, cols.get_loc('Депозит 1')] if 'Депозит 1' in cols else 0
+        second_advance = row.iloc[0, cols.get_loc('Депозит 2')] if 'Депозит 2' in cols else 0
+        total_salary = row.iloc[0, cols.get_loc('Итоговая з/п')] if 'Итоговая з/п' in cols else 0
 
-        return name, hours_first, hours_second, total_hours, first_advance, second_advance, total_salary
+        result = (name, hours_first, hours_second, total_hours, first_advance, second_advance, total_salary)
+        salary_cache[cache_key] = (result, now)
+        return result
+
     except Exception as e:
-        logging.error(f"Ошибка чтения данных: {e}")
-        return None, None, None, None, None, None, None
+        logging.error(f"Ошибка get_salary_data: {e}")
+        salary_cache[cache_key] = ((None,) * 7, now)
+        return (None,) * 7
 
 
-# Функция для получения данных о табеле
+# === ТАБЕЛЬ ===
 def get_tabel_data(user_name, month_sheet):
     try:
-        response = requests.get(TABEL_URL)
+        response = requests.get(TABEL_URL, timeout=10)
         if response.status_code != 200:
-            logging.error(f"Ошибка загрузки табеля: {response.status_code}")
             return []
 
         file_like = io.BytesIO(response.content)
-        df = pd.read_excel(file_like, sheet_name=month_sheet, engine='openpyxl', header=None, parse_dates=False)  # Добавили parse_dates=False
+        df = pd.read_excel(file_like, sheet_name=month_sheet, engine='openpyxl', header=None, parse_dates=False)
 
-        # Определяем точки: ассоциируем каждый столбец с точкой
         header = df.iloc[0]
         points = {}
         current_point = None
@@ -133,110 +141,67 @@ def get_tabel_data(user_name, month_sheet):
             if current_point:
                 points[col] = current_point
 
-        # Словарь для родительного падежа месяцев
         month_genitive = {
-            'Январь': 'января',
-            'Февраль': 'февраля',
-            'Март': 'марта',
-            'Апрель': 'апреля',
-            'Май': 'мая',
-            'Июнь': 'июня',
-            'Июль': 'июля',
-            'Август': 'августа',
-            'Сентябрь': 'сентября',
-            'Октябрь': 'октября',
-            'Ноябрь': 'ноября',
-            'Декабрь': 'декабря'
+            'Январь': 'января', 'Февраль': 'февраля', 'Март': 'марта', 'Апрель': 'апреля',
+            'Май': 'мая', 'Июнь': 'июня', 'Июль': 'июля', 'Август': 'августа',
+            'Сентябрь': 'сентября', 'Октябрь': 'октября', 'Ноябрь': 'ноября', 'Декабрь': 'декабря'
         }
-
-        base = datetime(1899, 12, 30)  # База для Excel дат (Windows версия)
+        base = datetime(1899, 12, 30)
         shifts = []
-        for row_idx in range(1, df.shape[0]):  # Переименовали row в row_idx для ясности
+
+        for row_idx in range(1, df.shape[0]):
             day_abbr = df.iloc[row_idx, 0]
-            if pd.isna(day_abbr):
-                continue
             serial = df.iloc[row_idx, 1]
-            if pd.isna(serial):
+            if pd.isna(day_abbr) or pd.isna(serial):
                 continue
 
-            # Обработка serial: если datetime, конвертируем в дату напрямую
             if isinstance(serial, datetime):
                 date = serial
             else:
                 try:
-                    serial = float(serial)  # На случай, если это float
-                    date = base + timedelta(days=serial)
-                except (ValueError, TypeError):
+                    date = base + timedelta(days=float(serial))
+                except:
                     continue
 
             for col in range(2, df.shape[1]):
                 cell = df.iloc[row_idx, col]
-                if isinstance(cell, str) and user_name in cell:  # Проверяем наличие имени (на случай с ролью)
-                    point = points.get(col)
-                    if point:
-                        shift_str = f"{day_abbr}, {date.day} {month_genitive.get(month_sheet, month_sheet.lower())}: {point}"
-                        shifts.append(shift_str)
-
+                if isinstance(cell, str) and user_name in cell:
+                    point = points.get(col, "Неизвестно")
+                    shift_str = f"{day_abbr}, {date.day} {month_genitive.get(month_sheet, month_sheet.lower())}: {point}"
+                    shifts.append(shift_str)
         return shifts
     except Exception as e:
-        logging.error(f"Ошибка чтения табеля: {e}")
+        logging.error(f"Ошибка get_tabel_data: {e}")
         return []
 
 
-# Функция для отправки напоминаний
+# === НАПОМИНАНИЯ ===
 def send_reminders():
     try:
-        # Загрузка списка сотрудников
-        response = requests.get(EXCEL_URL)
+        logging.info("Запуск напоминаний...")
+        response = requests.get(EXCEL_URL, timeout=10)
         if response.status_code != 200:
-            logging.error(f"Ошибка загрузки списка сотрудников: {response.status_code}")
             return
+        df_emp = pd.read_excel(io.BytesIO(response.content), sheet_name="Список сотрудников", engine='openpyxl')
+        name_to_id = {str(row[0]).strip(): int(row[1]) for _, row in df_emp.iterrows() if pd.notna(row[1])}
 
-        file_like = io.BytesIO(response.content)
-        df_emp = pd.read_excel(file_like, sheet_name="Список сотрудников", engine='openpyxl')
-
-        name_to_id = {}
-        for i in range(len(df_emp)):
-            name = str(df_emp.iloc[i, 0]).strip()
-            tid = df_emp.iloc[i, 1]
-            if pd.notna(tid):
-                name_to_id[name] = int(tid)
-
-        # Определение завтрашней даты
-        now = datetime.now()
-        tomorrow = now + timedelta(days=1)
+        tomorrow = datetime.now() + timedelta(days=1)
         month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
         month_sheet = month_names[tomorrow.month - 1]
-
-        # Словарь для родительного падежа месяцев
-        month_genitive = {
-            'Январь': 'января',
-            'Февраль': 'февраля',
-            'Март': 'марта',
-            'Апрель': 'апреля',
-            'Май': 'мая',
-            'Июнь': 'июня',
-            'Июль': 'июля',
-            'Август': 'августа',
-            'Сентябрь': 'сентября',
-            'Октябрь': 'октября',
-            'Ноябрь': 'ноября',
-            'Декабрь': 'декабря'
-        }
+        month_genitive = {v: k.lower()[:-1] + 'я' if v.endswith('ь') else k.lower()[:-1] + 'я' for k, v in {
+            'Январь': 'января', 'Февраль': 'февраля', 'Март': 'марта', 'Апрель': 'апреля',
+            'Май': 'мая', 'Июнь': 'июня', 'Июль': 'июля', 'Август': 'августа',
+            'Сентябрь': 'сентября', 'Октябрь': 'октября', 'Ноябрь': 'ноября', 'Декабрь': 'декабря'
+        }.items()}
 
         base = datetime(1899, 12, 30)
         serial_tomorrow = (tomorrow - base).days
 
-        # Загрузка табеля
-        response = requests.get(TABEL_URL)
+        response = requests.get(TABEL_URL, timeout=10)
         if response.status_code != 200:
-            logging.error(f"Ошибка загрузки табеля: {response.status_code}")
             return
+        df_tabel = pd.read_excel(io.BytesIO(response.content), sheet_name=month_sheet, engine='openpyxl', header=None)
 
-        file_like = io.BytesIO(response.content)
-        df_tabel = pd.read_excel(file_like, sheet_name=month_sheet, engine='openpyxl', header=None, parse_dates=False)
-
-        # Определяем точки
         header = df_tabel.iloc[0]
         points = {}
         current_point = None
@@ -246,51 +211,41 @@ def send_reminders():
             if current_point:
                 points[col] = current_point
 
-        # Находим строку для завтрашнего дня
         shift_row = None
         for r in range(1, df_tabel.shape[0]):
             s = df_tabel.iloc[r, 1]
-            if isinstance(s, (int, float)) and int(s) == serial_tomorrow:
+            if pd.notna(s) and int(float(s)) == serial_tomorrow:
                 shift_row = r
                 break
-
-        if shift_row is None:
-            logging.info("Нет смен на завтра")
+        if not shift_row:
             return
 
-        # Извлекаем имена и точки
         for col in range(2, df_tabel.shape[1]):
             cell = df_tabel.iloc[shift_row, col]
-            if isinstance(cell, str) and cell.strip():
-                name = cell.strip()
-                point = points.get(col, "Неизвестно")
+            if pd.notna(cell):
+                name = str(cell).strip()
                 tid = name_to_id.get(name)
                 if tid:
-                    msg = f"*Напоминание:* завтра ({tomorrow.day} {month_genitive.get(month_sheet, month_sheet.lower())}) у вас смена в {point}. 📅"
+                    point = points.get(col, "Неизвестно")
+                    msg = f"*Напоминание:* завтра ({tomorrow.day} {month_genitive.get(month_sheet, month_sheet.lower())}) смена в *{point}*."
                     bot.send_message(tid, msg, parse_mode='Markdown')
-                else:
-                    logging.error(f"Нет ID для имени: {name}")
     except Exception as e:
-        logging.error(f"Ошибка в отправке напоминаний: {e}")
+        logging.error(f"Ошибка в напоминаниях: {e}")
 
 
-# Функция для генерации главного меню
+# === МЕНЮ ===
 def get_main_menu_markup(registered):
     markup = InlineKeyboardMarkup(row_width=2)
     if not registered:
-        markup.add(InlineKeyboardButton("Зарегистрироваться ✅", callback_data="register"))
+        markup.add(InlineKeyboardButton("Зарегистрироваться", callback_data="register"))
     else:
         markup.add(
-            InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"),
-            InlineKeyboardButton("Мой табель 📅", callback_data="tabel")
+            InlineKeyboardButton("Узнать зарплату", callback_data="salary"),
+            InlineKeyboardButton("Мой табель", callback_data="tabel")
         )
-        markup.add(
-            InlineKeyboardButton("Заполнить форму 📝", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse")
-        )
+        markup.add(InlineKeyboardButton("Заполнить форму", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse"))
     return markup
 
-
-# Функция для генерации меню месяцев
 def get_month_menu_markup():
     markup = InlineKeyboardMarkup(row_width=3)
     markup.add(
@@ -298,303 +253,167 @@ def get_month_menu_markup():
         InlineKeyboardButton("Ноябрь", callback_data="month_Ноябрь"),
         InlineKeyboardButton("Декабрь", callback_data="month_Декабрь")
     )
-    markup.add(InlineKeyboardButton("Назад 🔙", callback_data="back_to_menu"))
+    markup.add(InlineKeyboardButton("Назад", callback_data="back_to_menu"))
     return markup
 
 
-# Путь к локальному файлу изображения (предполагаю .jpg; если GIF, измени на .gif и используй send_animation)
-photo_path = 'photo_2025-10-28_01-49-34.jpg'
-
-
-# Обработчик /start
+# === ОБРАБОТЧИКИ ===
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
     registered, name = is_registered(user_id)
-
-    if registered:
-        welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
-    else:
-        welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
-
+    welcome_msg = f"*Добро пожаловать, {name}!*" if registered else "*Добро пожаловать!*"
+    welcome_msg += "\n\nВыберите действие ниже."
     markup = get_main_menu_markup(registered)
-
-    # Отправляем изображение из локального файла с caption и меню
-    with open(photo_path, 'rb') as photo:
-        bot.send_photo(
-            message.chat.id,
-            photo=photo,
-            caption=welcome_msg,
-            parse_mode='Markdown',
-            reply_markup=markup
-        )
+    try:
+        with open(photo_path, 'rb') as photo:
+            bot.send_photo(message.chat.id, photo, caption=welcome_msg, parse_mode='Markdown', reply_markup=markup)
+    except Exception as e:
+        logging.error(f"Ошибка отправки фото: {e}")
+        bot.send_message(message.chat.id, welcome_msg, parse_mode='Markdown', reply_markup=markup)
 
 
-# Обработчик нажатия кнопок
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
     user_id = call.from_user.id
+    logging.info(f"Callback: {call.data} от {user_id}")
+
     registered, name = is_registered(user_id)
 
-    if call.data == "register":
-        if registered:
-            bot.answer_callback_query(call.id, "Вы уже зарегистрированы!")
-            return
-        user_states[user_id] = "waiting_for_name"
-        bot.answer_callback_query(call.id)
-        bot.send_message(
-            user_id,
-            "*Введите ваше имя:* ✍️",
-            parse_mode='Markdown'
-        )
-
-    elif call.data == "salary":
-        if not registered:
-            bot.answer_callback_query(call.id, "Вы не зарегистрированы! Сначала зарегистрируйтесь.")
-            return
-        bot.answer_callback_query(call.id)
-        bot.edit_message_text(
-            "*Выберите месяц для просмотра зарплаты:* 📅",
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            parse_mode='Markdown',
-            reply_markup=get_month_menu_markup()
-        )
-
-    elif call.data == "tabel":
-        if not registered:
-            bot.answer_callback_query(call.id, "Вы не зарегистрированы! Сначала зарегистрируйтесь.")
-            return
-        bot.answer_callback_query(call.id)
-
-        # Определяем текущий месяц
-        month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
-        current_month = month_names[datetime.now().month - 1]
-
-        shifts = get_tabel_data(name, current_month)
-
-        if not shifts:
-            tabel_msg = f"*Нет смен в {current_month.lower()}.* 😔"
-        else:
-            tabel_msg = f"**Ваши смены за {current_month}:** 📅\n\n" + "\n".join([f"- {shift}" for shift in shifts])
-
-        bot.send_message(
-            call.message.chat.id,
-            tabel_msg,
-            parse_mode='Markdown'
-        )
-
-        # Reset the menu message back to main (with photo)
-        if registered:
-            welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
-        else:
-            welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
-
-        markup = get_main_menu_markup(registered)
-        with open(photo_path, 'rb') as photo:
-            bot.send_photo(
-                call.message.chat.id,
-                photo=photo,
-                caption=welcome_msg,
-                parse_mode='Markdown',
-                reply_markup=markup
-            )
-
-    elif call.data.startswith("month_"):
-        month = call.data.split("_")[1]
-        bot.answer_callback_query(call.id)
-
-        name, hours_first, hours_second, total_hours, first_advance, second_advance, total_salary = get_salary_data(
-            month, user_id)
-
-        if name is None:
-            salary_msg = "*Данные не найдены для вашего ID в этом месяце.* 😔"
-        else:
-            salary_msg = f"**Ваша зарплата за {month}:** 💼\n\n" \
-                         f"**Имя:** {name} 👤\n\n" \
-                         f"**Отработано часов за 1 половину:** {hours_first} ⏰\n" \
-                         f"**Отработано часов за 2 половину:** {hours_second} ⏰\n" \
-                         f"**Всего часов:** {total_hours} ⏱️🔥\n\n" \
-                         f"**Первый аванс:** {first_advance} руб. 💰\n" \
-                         f"**Второй аванс:** {second_advance} руб. 💰\n" \
-                         f"**Итоговая з/п:** {total_salary} руб. 💵🎉"
-
-        bot.send_message(
-            call.message.chat.id,
-            salary_msg,
-            parse_mode='Markdown'
-        )
-
-        # Reset the menu message back to main (with photo)
-        if registered:
-            welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
-        else:
-            welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
-
-        markup = get_main_menu_markup(registered)
-        with open(photo_path, 'rb') as photo:
-            bot.send_photo(
-                call.message.chat.id,
-                photo=photo,
-                caption=welcome_msg,
-                parse_mode='Markdown',
-                reply_markup=markup
-            )
-
-    elif call.data == "back_to_menu":
-        bot.answer_callback_query(call.id)
-        if registered:
-            welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
-        else:
-            welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
-
-        markup = get_main_menu_markup(registered)
-        with open(photo_path, 'rb') as photo:
-            bot.send_photo(
-                call.message.chat.id,
-                photo=photo,
-                caption=welcome_msg,
-                parse_mode='Markdown',
-                reply_markup=markup
-            )
-
-    elif call.data.startswith("confirm_"):
-        if user_id != ADMIN_ID:
-            bot.answer_callback_query(call.id, "Только админ может подтверждать!")
-            return
-        confirm_user_id = int(call.data.split("_")[1])
-        confirm_name = pending_users.get(confirm_user_id)
-        if confirm_name:
-            # Предполагаем, что админ уже добавил в Sheets вручную — не добавляем автоматически
-            bot.answer_callback_query(call.id, "Подтверждено!")
-            bot.edit_message_reply_markup(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                reply_markup=None  # Удаляем кнопки
-            )
-
-            # Проверяем регистрацию (должна быть True, если админ добавил)
-            registered, name = is_registered(confirm_user_id)
+    try:
+        if call.data == "register":
             if registered:
-                welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
-                markup = get_main_menu_markup(registered=True)  # Меню с "Узнать зарплату"
+                bot.answer_callback_query(call.id, "Вы уже зарегистрированы!")
+                return
+            user_states[user_id] = "waiting_for_name"
+            bot.answer_callback_query(call.id)
+            bot.send_message(user_id, "*Введите ваше имя:*", parse_mode='Markdown')
 
-                bot.send_message(
-                    confirm_user_id,
-                    "*Ваша регистрация подтверждена! 🎉*",
-                    parse_mode='Markdown'
-                )
-                with open(photo_path, 'rb') as photo:
-                    bot.send_photo(
-                        confirm_user_id,
-                        photo=photo,
-                        caption=welcome_msg,
-                        parse_mode='Markdown',
-                        reply_markup=markup
-                    )
+        elif call.data == "salary":
+            if not registered:
+                bot.answer_callback_query(call.id, "Сначала зарегистрируйтесь!")
+                return
+            bot.answer_callback_query(call.id)  # МГНОВЕННЫЙ ОТВЕТ
+            bot.edit_message_text(
+                "*Выберите месяц:*",
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='Markdown',
+                reply_markup=get_month_menu_markup()
+            )
+
+        elif call.data == "tabel":
+            if not registered:
+                bot.answer_callback_query(call.id, "Сначала зарегистрируйтесь!")
+                return
+            bot.answer_callback_query(call.id)
+            month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+            current_month = month_names[datetime.now().month - 1]
+            shifts = get_tabel_data(name, current_month)
+            msg = f"**Ваши смены за {current_month}:**\n\n" + "\n".join([f"- {s}" for s in shifts]) if shifts else f"*Нет смен в {current_month.lower()}*"
+            bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
+            send_main_menu(call.message.chat.id, registered, name)
+
+        elif call.data.startswith("month_"):
+            month = call.data.split("_")[1]
+            bot.answer_callback_query(call.id)
+            data = get_salary_data(month, user_id)
+            if data[0] is None:
+                msg = "*Данные не найдены*"
             else:
-                # Если админ забыл добавить в Sheets
-                bot.send_message(
-                    confirm_user_id,
-                    "*Регистрация подтверждена, но данные не найдены. Свяжитесь с админом.* 😔",
-                    parse_mode='Markdown'
-                )
-                bot.answer_callback_query(call.id, "Пользователь не в Sheets — добавьте вручную!")
+                n, h1, h2, th, a1, a2, ts = data
+                msg = f"**Зарплата за {month}:**\n\n" \
+                      f"**Имя:** {n}\n" \
+                      f"**1 половина:** {h1} ч\n" \
+                      f"**2 половина:** {h2} ч\n" \
+                      f"**Всего:** {th} ч\n\n" \
+                      f"**Аванс 1:** {a1} руб.\n" \
+                      f"**Аванс 2:** {a2} руб.\n" \
+                      f"**Итого:** {ts} руб."
+            bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
+            send_main_menu(call.message.chat.id, registered, name)
 
-            del pending_users[confirm_user_id]
-        else:
-            bot.answer_callback_query(call.id, "Пользователь не найден!")
+        elif call.data == "back_to_menu":
+            bot.answer_callback_query(call.id)
+            send_main_menu(call.message.chat.id, registered, name)
 
-    elif call.data.startswith("reject_"):
-        if user_id != ADMIN_ID:
-            bot.answer_callback_query(call.id, "Только админ может отклонять!")
-            return
-        reject_user_id = int(call.data.split("_")[1])
-        if reject_user_id in pending_users:
-            bot.answer_callback_query(call.id, "Отклонено!")
-            bot.edit_message_reply_markup(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                reply_markup=None  # Удаляем кнопки
-            )
-            bot.send_message(
-                reject_user_id,
-                "*Ваша регистрация отклонена админом. 😔*\n\nПопробуйте снова или свяжитесь с поддержкой.",
-                parse_mode='Markdown'
-            )
-            del pending_users[reject_user_id]
-        else:
-            bot.answer_callback_query(call.id, "Пользователь не найден!")
+        elif call.data.startswith(("confirm_", "reject_")):
+            if user_id != ADMIN_ID:
+                bot.answer_callback_query(call.id, "Только админ!")
+                return
+            action, uid = call.data.split("_")
+            uid = int(uid)
+            if action == "confirm" and uid in pending_users:
+                bot.answer_callback_query(call.id, "Подтверждено!")
+                bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+                bot.send_message(uid, "*Регистрация подтверждена!*", parse_mode='Markdown')
+                del pending_users[uid]
+                reg, n = is_registered(uid)
+                if reg:
+                    send_main_menu(uid, True, n)
+            elif action == "reject" and uid in pending_users:
+                bot.answer_callback_query(call.id, "Отклонено!")
+                bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+                bot.send_message(uid, "*Регистрация отклонена*", parse_mode='Markdown')
+                del pending_users[uid]
+
+    except Exception as e:
+        logging.error(f"Ошибка в callback: {e}")
+        bot.answer_callback_query(call.id, "Ошибка, попробуйте позже")
 
 
-# Обработчик текстовых сообщений (для регистрации)
-@bot.message_handler(func=lambda message: True)
+def send_main_menu(chat_id, registered, name=None):
+    msg = f"*Добро пожаловать, {name}!*" if registered else "*Добро пожаловать!*"
+    msg += "\n\nВыберите действие ниже."
+    markup = get_main_menu_markup(registered)
+    try:
+        with open(photo_path, 'rb') as photo:
+            bot.send_photo(chat_id, photo, caption=msg, parse_mode='Markdown', reply_markup=markup)
+    except:
+        bot.send_message(chat_id, msg, parse_mode='Markdown', reply_markup=markup)
+
+
+@bot.message_handler(func=lambda m: True)
 def handle_text(message):
     user_id = message.from_user.id
-    state = user_states.get(user_id)
-
-    if state == "waiting_for_name":
+    if user_states.get(user_id) == "waiting_for_name":
         name = message.text.strip()
         username = message.from_user.username or "Не указан"
-        # Сохраняем pending
         pending_users[user_id] = name
-        # Отправляем пользователю
-        bot.send_message(
-            user_id,
-            f"*Заявка на регистрацию отправлена! 🎉*\n\nВаше имя: {name}\nОжидайте подтверждения от админа.",
-            parse_mode='Markdown'
-        )
-        # Отправляем админу с кнопками
+        bot.send_message(user_id, f"*Заявка отправлена!*\nОжидайте подтверждения.", parse_mode='Markdown')
+
         markup = InlineKeyboardMarkup()
         markup.add(
-            InlineKeyboardButton("Подтвердить ✅", callback_data=f"confirm_{user_id}"),
-            InlineKeyboardButton("Отклонить ❌", callback_data=f"reject_{user_id}")
+            InlineKeyboardButton("Подтвердить", callback_data=f"confirm_{user_id}"),
+            InlineKeyboardButton("Отклонить", callback_data=f"reject_{user_id}")
         )
-        try:
-            # Используем send_message с reply_markup
-            bot.send_message(
-                ADMIN_ID,
-                f"*Новая регистрация! 📋*\n\nИмя: {name}\nUsername: @{username}\nID: {user_id}",
-                parse_mode='Markdown',
-                reply_markup=markup  # <-- Убедись, что reply_markup передан правильно
-            )
-        except Exception as e:
-            logging.error(f"Ошибка отправки админу: {e}")
-        # Сбрасываем состояние
+        bot.send_message(ADMIN_ID, f"*Новая заявка!*\nИмя: {name}\n@{username}\nID: {user_id}", parse_mode='Markdown', reply_markup=markup)
         del user_states[user_id]
 
 
-# Для webhook на Render
+# === FLASK WEBHOOK ===
 app = flask.Flask(__name__)
-
 
 @app.route('/', methods=['GET', 'HEAD'])
 def index():
     return ''
 
-
 @app.route('/', methods=['POST'])
 def webhook():
     if flask.request.headers.get('content-type') == 'application/json':
-        json_string = flask.request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
+        update = telebot.types.Update.de_json(flask.request.get_data().decode('utf-8'))
         bot.process_new_updates([update])
         return ''
-    else:
-        flask.abort(403)
+    return 'Forbidden', 403
 
 
 if __name__ == '__main__':
-    # Удаляем старый webhook, если есть
     bot.remove_webhook()
-    # Устанавливаем новый webhook (для Render)
-    bot.set_webhook(url='https://telegram-bot-1-ydll.onrender.com')  # Замени на свой URL Render
+    bot.set_webhook(url='https://telegram-bot-1-ydll.onrender.com')
 
-    # Запускаем scheduler для напоминаний
-    scheduler = BackgroundScheduler(timezone="Europe/Moscow")  # Укажите нужный timezone
+    scheduler = BackgroundScheduler(timezone="Europe/Moscow")
     scheduler.add_job(send_reminders, 'cron', hour=20, minute=0)
     scheduler.start()
 
-    # Запускаем Flask сервер
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=False)
