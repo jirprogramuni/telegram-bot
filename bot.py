@@ -38,11 +38,6 @@ client = gspread.authorize(creds)
 SHEET_ID = '1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg'  # ID таблицы
 sheet = client.open_by_key(SHEET_ID)
 
-def escape_markdown(text):
-    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-    for char in special_chars:
-        text = text.replace(char, '\\' + char)
-    return text
 
 # Функция для проверки регистрации пользователя
 def is_registered(user_id):
@@ -286,7 +281,7 @@ def get_main_menu_markup(registered):
         markup.add(InlineKeyboardButton("Зарегистрироваться ✅", callback_data="register"))
     else:
         markup.add(
-            InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"),
+            InlineKeyboardButton("Моя зарплата 💰", callback_data="salary"),
             InlineKeyboardButton("Мой табель 📅", callback_data="tabel")
         )
     markup.add(
@@ -314,7 +309,7 @@ def start(message):
     registered, name = is_registered(user_id)
 
     if registered:
-        welcome_msg = f"*Добро пожаловать, {escape_markdown(name)}!*\n\nВыберите действие ниже. 😊"
+        welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
     else:
         welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
 
@@ -385,7 +380,7 @@ def callback_query(call):
 
         # Reset the menu message back to main
         if registered:
-            welcome_msg = f"*Добро пожаловать, {escape_markdown(name)}!*\n\nВыберите действие ниже. 😊"
+            welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
         else:
             welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
 
@@ -409,14 +404,14 @@ def callback_query(call):
         if name is None:
             salary_msg = "*Данные не найдены для вашего ID в этом месяце.* 😔"
         else:
-            salary_msg = f"*Ваша зарплата за {month}:* 💼\n\n" \
-                         f"*Имя:** {escape_markdown(name)} 👤\n\n" \
-                         f"*Отработано часов за 1 половину:* {hours_first} ⏰\n" \
-                         f"*Отработано часов за 2 половину:* {hours_second} ⏰\n" \
-                         f"*Всего часов:* {total_hours} ⏱️🔥\n\n" \
-                         f"*Первый аванс:* {first_advance} руб. 💰\n" \
-                         f"*Второй аванс:* {second_advance} руб. 💰\n" \
-                         f"*Итоговая з/п:* {total_salary} руб. 💵🎉"
+            salary_msg = f"**Ваша зарплата за {month}:** 💼\n\n" \
+                         f"**Имя:** {name} 👤\n\n" \
+                         f"**Отработано часов за 1 половину:** {hours_first} ⏰\n" \
+                         f"**Отработано часов за 2 половину:** {hours_second} ⏰\n" \
+                         f"**Всего часов:** {total_hours} ⏱️🔥\n\n" \
+                         f"**Первый аванс:** {first_advance} руб. 💰\n" \
+                         f"**Второй аванс:** {second_advance} руб. 💰\n" \
+                         f"**Итоговая з/п:** {total_salary} руб. 💵🎉"
 
         bot.send_message(
             call.message.chat.id,
@@ -426,7 +421,7 @@ def callback_query(call):
 
         # Reset the menu message back to main
         if registered:
-            welcome_msg = f"*Добро пожаловать, {escape_markdown(name)}!*\n\nВыберите действие ниже. 😊"
+            welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
         else:
             welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
 
@@ -443,7 +438,7 @@ def callback_query(call):
     elif call.data == "back_to_menu":
         bot.answer_callback_query(call.id)
         if registered:
-            welcome_msg = f"*Добро пожаловать, {escape_markdown(name)}!*\n\nВыберите действие ниже. 😊"
+            welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
         else:
             welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
 
@@ -475,7 +470,7 @@ def callback_query(call):
             # Проверяем регистрацию (должна быть True, если админ добавил)
             registered, name = is_registered(confirm_user_id)
             if registered:
-                welcome_msg = f"*Добро пожаловать, {escape_markdown(name)}!*\n\nВыберите действие ниже. 😊"
+                welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
                 markup = get_main_menu_markup(registered=True)  # Меню с "Узнать зарплату"
 
                 bot.send_message(
@@ -539,7 +534,7 @@ def handle_text(message):
         # Отправляем пользователю
         bot.send_message(
             user_id,
-            f"*Заявка на регистрацию отправлена! 🎉*\n\nВаше имя: {escape_markdown(name)}\nОжидайте подтверждения от админа.",
+            f"*Заявка на регистрацию отправлена! 🎉*\n\nВаше имя: {name}\nОжидайте подтверждения от админа.",
             parse_mode='Markdown'
         )
         # Отправляем админу с кнопками
@@ -552,7 +547,7 @@ def handle_text(message):
             # Используем send_message с reply_markup
             bot.send_message(
                 ADMIN_ID,
-                f"*Новая регистрация! 📋*\n\nИмя: {escape_markdown(name)}\nUsername: @{escape_markdown(username)}\nID: {user_id}",
+                f"*Новая регистрация! 📋*\n\nИмя: {name}\nUsername: @{username}\nID: {user_id}",
                 parse_mode='Markdown',
                 reply_markup=markup  # <-- Убедись, что reply_markup передан правильно
             )
