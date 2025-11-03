@@ -284,6 +284,9 @@ def get_main_menu_markup(registered):
             InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"),
             InlineKeyboardButton("Мой табель 📅", callback_data="tabel")
         )
+    markup.add(
+        InlineKeyboardButton("Заполнить форму", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse")
+    )
     return markup
 
 
@@ -312,9 +315,10 @@ def start(message):
 
     markup = get_main_menu_markup(registered)
 
-    bot.send_message(
+    bot.send_photo(
         message.chat.id,
-        welcome_msg,
+        photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+        caption=welcome_msg,
         parse_mode='Markdown',
         reply_markup=markup
     )
@@ -382,10 +386,10 @@ def callback_query(call):
 
         markup = get_main_menu_markup(registered)
 
-        bot.edit_message_text(
-            welcome_msg,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
+        bot.send_photo(
+            call.message.chat.id,
+            photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+            caption=welcome_msg,
             parse_mode='Markdown',
             reply_markup=markup
         )
@@ -423,10 +427,10 @@ def callback_query(call):
 
         markup = get_main_menu_markup(registered)
 
-        bot.edit_message_text(
-            welcome_msg,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
+        bot.send_photo(
+            call.message.chat.id,
+            photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+            caption=welcome_msg,
             parse_mode='Markdown',
             reply_markup=markup
         )
@@ -440,10 +444,10 @@ def callback_query(call):
 
         markup = get_main_menu_markup(registered)
 
-        bot.edit_message_text(
-            welcome_msg,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
+        bot.send_photo(
+            call.message.chat.id,
+            photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+            caption=welcome_msg,
             parse_mode='Markdown',
             reply_markup=markup
         )
@@ -474,9 +478,10 @@ def callback_query(call):
                     "*Ваша регистрация подтверждена! 🎉*",
                     parse_mode='Markdown'
                 )
-                bot.send_message(
+                bot.send_photo(
                     confirm_user_id,
-                    welcome_msg,
+                    photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+                    caption=welcome_msg,
                     parse_mode='Markdown',
                     reply_markup=markup
                 )
