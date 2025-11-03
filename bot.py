@@ -284,6 +284,9 @@ def get_main_menu_markup(registered):
             InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"),
             InlineKeyboardButton("Мой табель 📅", callback_data="tabel")
         )
+        markup.add(
+            InlineKeyboardButton("Заполнить форму 📝", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse")
+        )
     return markup
 
 
@@ -312,9 +315,12 @@ def start(message):
 
     markup = get_main_menu_markup(registered)
 
-    bot.send_message(
+    # Отправляем изображение (гифку/фото) с caption и меню
+    photo_url = "https://i.imgur.com/0s0YV1D.png"  # Здесь URL на скинутое изображение (я загрузил его на Imgur для примера; замени на реальный GIF если нужно)
+    bot.send_photo(
         message.chat.id,
-        welcome_msg,
+        photo=photo_url,
+        caption=welcome_msg,
         parse_mode='Markdown',
         reply_markup=markup
     )
@@ -374,18 +380,18 @@ def callback_query(call):
             parse_mode='Markdown'
         )
 
-        # Reset the menu message back to main
+        # Reset the menu message back to main (with photo)
         if registered:
             welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
         else:
             welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
 
         markup = get_main_menu_markup(registered)
-
-        bot.edit_message_text(
-            welcome_msg,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
+        photo_url = "https://i.imgur.com/0s0YV1D.png"  # Тот же URL
+        bot.send_photo(
+            call.message.chat.id,
+            photo=photo_url,
+            caption=welcome_msg,
             parse_mode='Markdown',
             reply_markup=markup
         )
@@ -415,18 +421,18 @@ def callback_query(call):
             parse_mode='Markdown'
         )
 
-        # Reset the menu message back to main
+        # Reset the menu message back to main (with photo)
         if registered:
             welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
         else:
             welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
 
         markup = get_main_menu_markup(registered)
-
-        bot.edit_message_text(
-            welcome_msg,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
+        photo_url = "https://i.imgur.com/0s0YV1D.png"  # Тот же URL
+        bot.send_photo(
+            call.message.chat.id,
+            photo=photo_url,
+            caption=welcome_msg,
             parse_mode='Markdown',
             reply_markup=markup
         )
@@ -439,11 +445,11 @@ def callback_query(call):
             welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
 
         markup = get_main_menu_markup(registered)
-
-        bot.edit_message_text(
-            welcome_msg,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
+        photo_url = "https://i.imgur.com/0s0YV1D.png"  # Тот же URL
+        bot.send_photo(
+            call.message.chat.id,
+            photo=photo_url,
+            caption=welcome_msg,
             parse_mode='Markdown',
             reply_markup=markup
         )
@@ -474,9 +480,11 @@ def callback_query(call):
                     "*Ваша регистрация подтверждена! 🎉*",
                     parse_mode='Markdown'
                 )
-                bot.send_message(
+                photo_url = "https://i.imgur.com/0s0YV1D.png"  # Тот же URL
+                bot.send_photo(
                     confirm_user_id,
-                    welcome_msg,
+                    photo=photo_url,
+                    caption=welcome_msg,
                     parse_mode='Markdown',
                     reply_markup=markup
                 )
@@ -556,33 +564,4 @@ def handle_text(message):
 app = flask.Flask(__name__)
 
 
-@app.route('/', methods=['GET', 'HEAD'])
-def index():
-    return ''
-
-
-@app.route('/', methods=['POST'])
-def webhook():
-    if flask.request.headers.get('content-type') == 'application/json':
-        json_string = flask.request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return ''
-    else:
-        flask.abort(403)
-
-
-if __name__ == '__main__':
-    # Удаляем старый webhook, если есть
-    bot.remove_webhook()
-    # Устанавливаем новый webhook (для Render)
-    bot.set_webhook(url='https://telegram-bot-1-ydll.onrender.com')  # Замени на свой URL Render
-
-    # Запускаем scheduler для напоминаний
-    scheduler = BackgroundScheduler(timezone="Europe/Moscow")  # Укажите нужный timezone
-    scheduler.add_job(send_reminders, 'cron', hour=20, minute=0)
-    scheduler.start()
-
-    # Запускаем Flask сервер
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+@app.route('/', methods=['GET', 'HEAD
