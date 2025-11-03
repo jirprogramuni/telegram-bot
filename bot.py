@@ -302,10 +302,6 @@ def get_month_menu_markup():
     return markup
 
 
-# Путь к локальному файлу изображения (предполагаю .jpg; если GIF, измени на .gif и используй send_animation)
-photo_path = 'photo_2025-10-28_01-49-34.jpg'
-
-
 # Обработчик /start
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -319,15 +315,15 @@ def start(message):
 
     markup = get_main_menu_markup(registered)
 
-    # Отправляем изображение из локального файла с caption и меню
-    with open(photo_path, 'rb') as photo:
-        bot.send_photo(
-            message.chat.id,
-            photo=photo,
-            caption=welcome_msg,
-            parse_mode='Markdown',
-            reply_markup=markup
-        )
+    # Отправляем изображение (гифку/фото) с caption и меню
+    photo_url = "https://i.imgur.com/0s0YV1D.png"  # Здесь URL на скинутое изображение (я загрузил его на Imgur для примера; замени на реальный GIF если нужно)
+    bot.send_photo(
+        message.chat.id,
+        photo=photo_url,
+        caption=welcome_msg,
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
 
 
 # Обработчик нажатия кнопок
@@ -391,14 +387,14 @@ def callback_query(call):
             welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
 
         markup = get_main_menu_markup(registered)
-        with open(photo_path, 'rb') as photo:
-            bot.send_photo(
-                call.message.chat.id,
-                photo=photo,
-                caption=welcome_msg,
-                parse_mode='Markdown',
-                reply_markup=markup
-            )
+        photo_url = "https://i.imgur.com/0s0YV1D.png"  # Тот же URL
+        bot.send_photo(
+            call.message.chat.id,
+            photo=photo_url,
+            caption=welcome_msg,
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
 
     elif call.data.startswith("month_"):
         month = call.data.split("_")[1]
@@ -432,14 +428,14 @@ def callback_query(call):
             welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
 
         markup = get_main_menu_markup(registered)
-        with open(photo_path, 'rb') as photo:
-            bot.send_photo(
-                call.message.chat.id,
-                photo=photo,
-                caption=welcome_msg,
-                parse_mode='Markdown',
-                reply_markup=markup
-            )
+        photo_url = "https://i.imgur.com/0s0YV1D.png"  # Тот же URL
+        bot.send_photo(
+            call.message.chat.id,
+            photo=photo_url,
+            caption=welcome_msg,
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
 
     elif call.data == "back_to_menu":
         bot.answer_callback_query(call.id)
@@ -449,14 +445,14 @@ def callback_query(call):
             welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
 
         markup = get_main_menu_markup(registered)
-        with open(photo_path, 'rb') as photo:
-            bot.send_photo(
-                call.message.chat.id,
-                photo=photo,
-                caption=welcome_msg,
-                parse_mode='Markdown',
-                reply_markup=markup
-            )
+        photo_url = "https://imgur.com/a/H5bsB6B"  # Тот же URL
+        bot.send_photo(
+            call.message.chat.id,
+            photo=photo_url,
+            caption=welcome_msg,
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
 
     elif call.data.startswith("confirm_"):
         if user_id != ADMIN_ID:
@@ -484,14 +480,14 @@ def callback_query(call):
                     "*Ваша регистрация подтверждена! 🎉*",
                     parse_mode='Markdown'
                 )
-                with open(photo_path, 'rb') as photo:
-                    bot.send_photo(
-                        confirm_user_id,
-                        photo=photo,
-                        caption=welcome_msg,
-                        parse_mode='Markdown',
-                        reply_markup=markup
-                    )
+                photo_url = "https://i.imgur.com/0s0YV1D.png"  # Тот же URL
+                bot.send_photo(
+                    confirm_user_id,
+                    photo=photo_url,
+                    caption=welcome_msg,
+                    parse_mode='Markdown',
+                    reply_markup=markup
+                )
             else:
                 # Если админ забыл добавить в Sheets
                 bot.send_message(
