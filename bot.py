@@ -281,7 +281,7 @@ def get_main_menu_markup(registered):
         markup.add(InlineKeyboardButton("Зарегистрироваться ✅", callback_data="register"))
     else:
         markup.add(
-            InlineKeyboardButton("Моя арплата 💰", callback_data="salary"),
+            InlineKeyboardButton("Моя зарплата 💰", callback_data="salary"),
             InlineKeyboardButton("Мой табель 📅", callback_data="tabel")
         )
     markup.add(
