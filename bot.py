@@ -10,6 +10,7 @@ import io
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from apscheduler.schedulers.background import BackgroundScheduler
+import calendar
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -278,6 +279,44 @@ def send_reminders():
         logging.error(f"Ошибка в отправке напоминаний: {e}")
 
 
+# Функция для создания календаря
+def create_calendar(year=None, month=None, user_id=None):
+    now = datetime.now()
+    year = year or now.year
+    month = month or now.month
+    markup = InlineKeyboardMarkup(row_width=7)
+    month_names_list = list(month_names.values())
+    header = [InlineKeyboardButton("<", callback_data=f"cal-prev-{year}-{month}"),
+              InlineKeyboardButton(month_names_list[month-1], callback_data="ignore"),
+              InlineKeyboardButton(">", callback_data=f"cal-next-{year}-{month}")]
+    markup.add(*header)
+    week_days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    markup.add(*[InlineKeyboardButton(d, callback_data="ignore") for d in week_days])
+    month_cal = calendar.monthcalendar(year, month)
+    for week in month_cal:
+        row = []
+        for day in week:
+            if day == 0:
+                row.append(InlineKeyboardButton(" ", callback_data="ignore"))
+            else:
+                row.append(InlineKeyboardButton(str(day), callback_data=f"cal-day-{day}-{month}-{year}"))
+        markup.add(*row)
+    return markup
+
+# Функция для создания выбора часа
+def create_hour_picker(prefix):
+    markup = InlineKeyboardMarkup(row_width=4)
+    for h in range(0, 24):
+        markup.add(InlineKeyboardButton(f"{h:02d}", callback_data=f"{prefix}_hour_{h}"))
+    return markup
+
+# Функция для создания выбора минуты
+def create_minute_picker(prefix, hour):
+    markup = InlineKeyboardMarkup(row_width=4)
+    for m in range(0, 60, 15):  # Шаги по 15 мин
+        markup.add(InlineKeyboardButton(f"{m:02d}", callback_data=f"{prefix}_min_{hour}_{m}"))
+    return markup
+
 # Функция для генерации главного меню
 def get_main_menu_markup(registered):
     markup = InlineKeyboardMarkup(row_width=2)
@@ -452,41 +491,100 @@ def callback_query(call):
             parse_mode='Markdown',
             reply_markup=markup
         )
+
     elif call.data == "report_shift":
         if not registered:
             bot.answer_callback_query(call.id, "Вы не зарегистрированы! Сначала зарегистрируйтесь.")
             return
         bot.answer_callback_query(call.id)
         user_states[user_id] = {"state": "report_date"}
-        bot.send_message(
-            user_id,
-            "*Введите дату смены (ДД.ММ.ГГГГ):*",
-            parse_mode='Markdown'
+        now = datetime.now()
+        bot.edit_message_text(
+            "*Выберите дату смены:*",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=create_calendar(now.year, now.month)
         )
+
+    elif call.data.startswith("cal-"):
+        parts = call.data.split('-')
+        if parts[1] == 'prev':
+            year = int(parts[2])
+            month = int(parts[3]) - 1
+            if month == 0:
+                month = 12
+                year -= 1
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=create_calendar(year, month))
+        elif parts[1] == 'next':
+            year = int(parts[2])
+            month = int(parts[3]) + 1
+            if month == 13:
+                month = 1
+                year += 1
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=create_calendar(year, month))
+        elif parts[1] == 'day':
+            day = int(parts[2])
+            month = int(parts[3])
+            year = int(parts[4])
+            shift_date = datetime(year, month, day)
+            if user_id in user_states and user_states[user_id].get("state") == "report_date":
+                user_states[user_id]["date"] = shift_date
+                user_states[user_id]["state"] = "report_venue"
+                venues = ["КУЧИНО", "РЕУТОВ (Победы)", "РЕУТОВ (Юбилейный)", "НЯМС", "ЛЕНИНА"]
+                markup = InlineKeyboardMarkup(row_width=1)
+                for v in venues:
+                    markup.add(InlineKeyboardButton(v, callback_data=f"venue_{v}"))
+                bot.edit_message_text("*Выберите заведение:*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
 
     elif call.data.startswith("venue_"):
         venue = call.data[6:]
         if user_id in user_states and user_states[user_id].get("state") == "report_venue":
             user_states[user_id]["venue"] = venue
             user_states[user_id]["state"] = "report_start_time"
-            bot.answer_callback_query(call.id)
-            bot.send_message(
-                user_id,
-                "*Введите время начала смены (ЧЧ:ММ):*",
-                parse_mode='Markdown'
-            )
+            bot.edit_message_text("*Выберите час начала смены:*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=create_hour_picker("start"))
+
+    elif call.data.startswith("start_hour_"):
+        hour = int(call.data[11:])
+        if user_id in user_states and user_states[user_id].get("state") == "report_start_time":
+            user_states[user_id]["temp_hour"] = hour
+            bot.edit_message_text(f"*Выберите минуты начала для {hour:02d}:*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=create_minute_picker("start", hour))
+
+    elif call.data.startswith("start_min_"):
+        parts = call.data.split('_')[2:]
+        hour = int(parts[0])
+        min_ = int(parts[1])
+        if user_id in user_states and user_states[user_id].get("state") == "report_start_time":
+            frac_start = (hour + min_ / 60) / 24
+            user_states[user_id]["start"] = frac_start
+            user_states[user_id]["state"] = "report_end_time"
+            bot.edit_message_text("*Выберите час конца смены:*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=create_hour_picker("end"))
+
+    elif call.data.startswith("end_hour_"):
+        hour = int(call.data[9:])
+        if user_id in user_states and user_states[user_id].get("state") == "report_end_time":
+            user_states[user_id]["temp_hour"] = hour
+            bot.edit_message_text(f"*Выберите минуты конца для {hour:02d}:*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=create_minute_picker("end", hour))
+
+    elif call.data.startswith("end_min_"):
+        parts = call.data.split('_')[2:]
+        hour = int(parts[0])
+        min_ = int(parts[1])
+        if user_id in user_states and user_states[user_id].get("state") == "report_end_time":
+            frac_end = (hour + min_ / 60) / 24
+            user_states[user_id]["end"] = frac_end
+            user_states[user_id]["state"] = "report_rating"
+            markup = InlineKeyboardMarkup(row_width=5)
+            for i in range(1, 6):
+                markup.add(InlineKeyboardButton(str(i), callback_data=f"rating_{i}"))
+            bot.edit_message_text("*Оцените смену (1-5):*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
 
     elif call.data.startswith("rating_"):
         rating = int(call.data[7:])
         if user_id in user_states and user_states[user_id].get("state") == "report_rating":
             user_states[user_id]["rating"] = rating
             user_states[user_id]["state"] = "report_comment"
-            bot.answer_callback_query(call.id)
-            bot.send_message(
-                user_id,
-                "*Расскажите, как прошла смена? (или /skip для пропуска):*",
-                parse_mode='Markdown'
-            )
+            bot.edit_message_text("*Расскажите, как прошла ваша смена? (или /skip для пропуска)*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=None)
 
     elif call.data.startswith("confirm_"):
         if user_id != ADMIN_ID:
@@ -554,8 +652,10 @@ def callback_query(call):
         else:
             bot.answer_callback_query(call.id, "Пользователь не найден!")
 
+    bot.answer_callback_query(call.id)
 
-# Обработчик текстовых сообщений (для регистрации и отчета о смене)
+
+# Обработчик текстовых сообщений (для регистрации и комментария)
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     user_id = message.from_user.id
@@ -579,63 +679,21 @@ def handle_text(message):
             InlineKeyboardButton("Отклонить ❌", callback_data=f"reject_{user_id}")
         )
         try:
-            # Используем send_message с reply_markup
             bot.send_message(
                 ADMIN_ID,
                 f"*Новая регистрация! 📋*\n\nИмя: {name}\nUsername: @{username}\nID: {user_id}",
                 parse_mode='Markdown',
-                reply_markup=markup  # <-- Убедись, что reply_markup передан правильно
+                reply_markup=markup
             )
         except Exception as e:
             logging.error(f"Ошибка отправки админу: {e}")
         # Сбрасываем состояние
         del user_states[user_id]
 
-    elif isinstance(state, dict) and state.get("state") == "report_date":
-        try:
-            date_str = message.text.strip()
-            shift_date = datetime.strptime(date_str, "%d.%m.%Y")
-            user_states[user_id]["date"] = shift_date
-            user_states[user_id]["state"] = "report_venue"
-
-            venues = ["КУЧИНО", "РЕУТОВ (Победы)", "РЕУТОВ (Юбилейный)", "НЯМС", "ЛЕНИНА"]
-            markup = InlineKeyboardMarkup(row_width=1)
-            for v in venues:
-                markup.add(InlineKeyboardButton(v, callback_data=f"venue_{v}"))
-            bot.send_message(user_id, "*Выберите заведение:*", parse_mode='Markdown', reply_markup=markup)
-        except ValueError:
-            bot.send_message(user_id, "*Неверный формат даты. Попробуйте снова (ДД.ММ.ГГГГ).*", parse_mode='Markdown')
-
-    elif isinstance(state, dict) and state.get("state") == "report_start_time":
-        try:
-            time_str = message.text.strip()
-            start_time = datetime.strptime(time_str, "%H:%M")
-            frac_start = (start_time.hour + start_time.minute / 60) / 24
-            user_states[user_id]["start"] = frac_start
-            user_states[user_id]["state"] = "report_end_time"
-            bot.send_message(user_id, "*Введите время конца смены (ЧЧ:ММ):*", parse_mode='Markdown')
-        except ValueError:
-            bot.send_message(user_id, "*Неверный формат времени. Попробуйте снова (ЧЧ:ММ).*", parse_mode='Markdown')
-
-    elif isinstance(state, dict) and state.get("state") == "report_end_time":
-        try:
-            time_str = message.text.strip()
-            end_time = datetime.strptime(time_str, "%H:%M")
-            frac_end = (end_time.hour + end_time.minute / 60) / 24
-            user_states[user_id]["end"] = frac_end
-            user_states[user_id]["state"] = "report_rating"
-
-            markup = InlineKeyboardMarkup(row_width=5)
-            for i in range(1, 6):
-                markup.add(InlineKeyboardButton(str(i), callback_data=f"rating_{i}"))
-            bot.send_message(user_id, "*Оцените смену (1-5):*", parse_mode='Markdown', reply_markup=markup)
-        except ValueError:
-            bot.send_message(user_id, "*Неверный формат времени. Попробуйте снова (ЧЧ:ММ).*", parse_mode='Markdown')
-
     elif isinstance(state, dict) and state.get("state") == "report_comment":
-        comment = "" if message.text.strip() == "/skip" else message.text.strip()
+        comment = message.text.strip() if message.text.strip() != "/skip" else ""
 
-        # Собираем все данные
+        # Собираем данные
         shift_date = state["date"]
         venue = state["venue"]
         start_frac = state["start"]
@@ -648,7 +706,7 @@ def handle_text(message):
         # Рассчитываем часы
         hours = round((end_frac - start_frac) * 24)
 
-        # Определяем лист месяца
+        # Определяем месяц
         month_sheet = month_names.get(shift_date.month, 'Неизвестно')
 
         # Получаем ставку
@@ -657,19 +715,16 @@ def handle_text(message):
             data = worksheet.get_all_values()
             df = pd.DataFrame(data[1:], columns=data[0]) if data else pd.DataFrame()
 
-            # Ищем по Telegram ID
             row = df[df['Telegram ID'].astype(str).str.strip() == str(user_id)]
             if row.empty:
-                # По имени сотрудника
                 row = df[df['Имя сотрудника'].str.strip() == name]
             if row.empty:
-                # По первой колонке (для старых листов)
                 row = df[df.iloc[:, 0].str.strip() == name]
 
-            stake = float(row['Ставка'].values[0]) if not row.empty and 'Ставка' in row.columns else 0.0
+            stake = float(row['Ставка'].values[0]) if not row.empty and 'Ставка' in row.columns else 250.0  # fallback 250
         except Exception as e:
             logging.error(f"Ошибка получения ставки: {e}")
-            stake = 0.0
+            stake = 250.0
 
         earn = int(hours * stake)
 
@@ -677,33 +732,53 @@ def handle_text(message):
         confirm_msg = f"Привет, {name}! 👋 Твоя смена за {shift_date.strftime('%d.%m.%Y')} успешно засчитана. Время работы — {hours} ч. ⏱️ Ты заработал {earn} рублей! 💰 До новых встреч! 🙌"
         bot.send_message(user_id, confirm_msg)
 
-        # Записываем в "Сырые ответы формы"
+        # База для serial
+        base = datetime(1899, 12, 30)
+        timestamp_serial = (datetime.now() - base).days + (datetime.now().hour / 24 + datetime.now().minute / 1440 + datetime.now().second / 86400)
+        date_serial = (shift_date - base).days
+
+        # Запись в "Сырые ответы формы"
         try:
-            now = datetime.now()
-            base = datetime(1899, 12, 30)
-            timestamp_serial = (now - base).days + (now.hour / 24 + now.minute / 1440 + now.second / 86400)
-            date_serial = (shift_date - base).days
-
             email = f"{message.from_user.username}@telegram.com" if message.from_user.username else ""
-
             raw_worksheet = sheet.worksheet("Сырые ответы формы")
             raw_worksheet.append_row([timestamp_serial, email, date_serial, venue, name, start_frac, end_frac, rating, comment, ""])
         except Exception as e:
             logging.error(f"Ошибка записи в сырые ответы: {e}")
 
-        # Записываем в "База данных"
+        # Запись в "База данных"
         try:
             base_worksheet = sheet.worksheet("База данных")
             base_worksheet.append_row([date_serial, venue, name, start_frac, end_frac, hours])
         except Exception as e:
             logging.error(f"Ошибка записи в базу данных: {e}")
 
+        # Обновление месячного листа
+        try:
+            worksheet = sheet.worksheet(month_sheet)
+            data = worksheet.get_all_values()
+            headers = data[0]
+
+            date_str = str(date_serial)
+            col_index = headers.index(date_str) if date_str in headers else -1
+
+            if col_index != -1:
+                row_index = -1
+                for i in range(1, len(data)):
+                    row = data[i]
+                    if row[0].strip() == name or (len(row) > 1 and row[1].strip() == str(user_id)):
+                        row_index = i
+                        break
+                if row_index != -1:
+                    worksheet.update_cell(row_index + 1, col_index + 1, hours)
+        except Exception as e:
+            logging.error(f"Ошибка обновления месячного листа: {e}")
+
         # Сбрасываем состояние
         del user_states[user_id]
 
-        # Отправляем главное меню снова
+        # Отправляем главное меню
         welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
-        markup = get_main_menu_markup(registered=True)
+        markup = get_main_menu_markup(True)
         bot.send_message(user_id, welcome_msg, parse_mode='Markdown', reply_markup=markup)
 
 
