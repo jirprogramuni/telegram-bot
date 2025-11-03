@@ -445,7 +445,7 @@ def callback_query(call):
             welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
 
         markup = get_main_menu_markup(registered)
-        photo_url = "https://imgur.com/a/H5bsB6B"  # Тот же URL
+        photo_url = "https://i.imgur.com/0s0YV1D.png"  # Тот же URL
         bot.send_photo(
             call.message.chat.id,
             photo=photo_url,
