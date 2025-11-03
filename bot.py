@@ -564,33 +564,4 @@ def handle_text(message):
 app = flask.Flask(__name__)
 
 
-@app.route('/', methods=['GET', 'HEAD'])
-def index():
-    return ''
-
-
-@app.route('/', methods=['POST'])
-def webhook():
-    if flask.request.headers.get('content-type') == 'application/json':
-        json_string = flask.request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return ''
-    else:
-        flask.abort(403)
-
-
-if __name__ == '__main__':
-    # Удаляем старый webhook, если есть
-    bot.remove_webhook()
-    # Устанавливаем новый webhook (для Render)
-    bot.set_webhook(url='https://telegram-bot-1-ydll.onrender.com')  # Замени на свой URL Render
-
-    # Запускаем scheduler для напоминаний
-    scheduler = BackgroundScheduler(timezone="Europe/Moscow")  # Укажите нужный timezone
-    scheduler.add_job(send_reminders, 'cron', hour=20, minute=0)
-    scheduler.start()
-
-    # Запускаем Flask сервер
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+@app.route('/', methods=['GET', 'HEAD
