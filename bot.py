@@ -14,7 +14,7 @@ import zoneinfo
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
-
+MINI_APP_URL = os.environ.get('RENDER_EXTERNAL_URL', 'http://localhost')
 # Токен бота и ID админа
 BOT_TOKEN = '7478861606:AAF-7eV0XjTn7S_6Q_caIk7Y27kGsfU_f-A'  # Замени на свой токен
 ADMIN_ID = 476747112  # Замени на свой user ID (число)
@@ -300,7 +300,7 @@ def get_main_menu_markup(registered):
             InlineKeyboardButton("Мой табель 📅", callback_data="tabel")
         )
         markup.add(
-            InlineKeyboardButton("Заполнить форму 📝", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse")
+            InlineKeyboardButton("Заполнить форму 📝", web_app=WebAppInfo(url=MINI_APP_URL))
         )
     return markup
 
@@ -614,5 +614,8 @@ if __name__ == '__main__':
     scheduler.start()
 
     # Запускаем Flask сервер
-    port = int(os.environ.get('PORT', 5000))
+    bot.remove_webhook()
+    bot.set_webhook(url=f"{MINI_APP_URL}/webhook")
+    port = int(os.environ.get('BOT_PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+

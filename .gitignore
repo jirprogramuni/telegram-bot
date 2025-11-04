@@ -1,0 +1,6 @@
+node_modules
+.env
+credentials.json
+frontend/dist
+__pycache__
+*.pyc

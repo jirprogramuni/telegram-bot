@@ -1,0 +1,6 @@
+body { margin: 0; font-family: Arial, sans-serif; background: #f0f0f0; }
+.container { padding: 20px; max-width: 400px; margin: auto; }
+.input { margin-bottom: 15px; }
+.button { width: 100%; margin-top: 10px; }
+.admin-list { margin-top: 20px; }
+.shift-item { border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; border-radius: 5px; }
