@@ -83,6 +83,10 @@ def add_to_sheet(name, user_id):
 # Функция для чтения данных о зарплате и часах
 def get_salary_data(month_sheet, telegram_id):
     try:
+        registered, name = is_registered(telegram_id)
+        if not registered:
+            return None, None, None, None, None, None, None
+
         response = requests.get(EXCEL_URL)
         if response.status_code != 200:
             logging.error(f"Ошибка загрузки файла: {response.status_code}")
@@ -91,13 +95,12 @@ def get_salary_data(month_sheet, telegram_id):
         file_like = io.BytesIO(response.content)
         df = pd.read_excel(file_like, sheet_name=month_sheet, engine='openpyxl')
 
-        # Ищем строку по Telegram ID (столбец B, индекс 1)
-        row = df[df.iloc[:, 1] == telegram_id]
+        # Ищем строку по имени (столбец A, индекс 0)
+        row = df[df.iloc[:, 0] == name]
 
         if row.empty:
             return None, None, None, None, None, None, None
 
-        name = row.iloc[0, 0]  # Столбец A - имя
         columns = df.columns
         hours_first_col = columns.get_loc('Общие часы 1 половина') if 'Общие часы 1 половина' in columns else None
         hours_second_col = columns.get_loc('Общие часы 2 половина') if 'Общие часы 2 половина' in columns else None
@@ -607,7 +610,7 @@ if __name__ == '__main__':
 
     # Запускаем scheduler для напоминаний
     scheduler = BackgroundScheduler(timezone=zoneinfo.ZoneInfo("Europe/Moscow"))  # Укажите нужный timezone
-    scheduler.add_job(send_reminders, 'cron', hour=20, minute=59)
+    scheduler.add_job(send_reminders, 'cron', hour=22, minute=15)
     scheduler.start()
 
     # Запускаем Flask сервер
