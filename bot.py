@@ -10,6 +10,7 @@ import io
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from apscheduler.schedulers.background import BackgroundScheduler
+import zoneinfo
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -191,6 +192,12 @@ def get_tabel_data(user_name, month_sheet):
 # Функция для отправки напоминаний
 def send_reminders():
     try:
+        tz = zoneinfo.ZoneInfo("Europe/Moscow")
+        now = datetime.now(tz=tz)
+        tomorrow = now + timedelta(days=1)
+        month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+        month_sheet = month_names[tomorrow.month - 1]
+
         # Загрузка списка сотрудников
         response = requests.get(EXCEL_URL)
         if response.status_code != 200:
@@ -206,12 +213,6 @@ def send_reminders():
             tid = df_emp.iloc[i, 1]
             if pd.notna(tid):
                 name_to_id[name] = int(tid)
-
-        # Определение завтрашней даты
-        now = datetime.now()
-        tomorrow = now + timedelta(days=1)
-        month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
-        month_sheet = month_names[tomorrow.month - 1]
 
         # Словарь для родительного падежа месяцев
         month_genitive = {
@@ -230,7 +231,7 @@ def send_reminders():
         }
 
         base = datetime(1899, 12, 30)
-        serial_tomorrow = (tomorrow - base).days
+        serial_tomorrow = (tomorrow.date() - base.date()).days
 
         # Загрузка табеля
         response = requests.get(TABEL_URL)
@@ -255,9 +256,15 @@ def send_reminders():
         shift_row = None
         for r in range(1, df_tabel.shape[0]):
             s = df_tabel.iloc[r, 1]
-            if isinstance(s, (int, float)) and int(s) == serial_tomorrow:
-                shift_row = r
-                break
+            if isinstance(s, datetime):
+                serial_from_sheet = (s.date() - base.date()).days
+                if serial_from_sheet == serial_tomorrow:
+                    shift_row = r
+                    break
+            elif isinstance(s, (int, float)):
+                if int(s) == serial_tomorrow:
+                    shift_row = r
+                    break
 
         if shift_row is None:
             logging.info("Нет смен на завтра")
@@ -367,8 +374,9 @@ def callback_query(call):
         bot.answer_callback_query(call.id)
 
         # Определяем текущий месяц
+        tz = zoneinfo.ZoneInfo("Europe/Moscow")
         month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
-        current_month = month_names[datetime.now().month - 1]
+        current_month = month_names[datetime.now(tz=tz).month - 1]
 
         shifts = get_tabel_data(name, current_month)
 
@@ -598,8 +606,8 @@ if __name__ == '__main__':
     bot.set_webhook(url='https://telegram-bot-1-ydll.onrender.com')  # Замени на свой URL Render
 
     # Запускаем scheduler для напоминаний
-    scheduler = BackgroundScheduler(timezone="Europe/Moscow")  # Укажите нужный timezone
-    scheduler.add_job(send_reminders, 'cron', hour=20, minute=40)
+    scheduler = BackgroundScheduler(timezone=zoneinfo.ZoneInfo("Europe/Moscow"))  # Укажите нужный timezone
+    scheduler.add_job(send_reminders, 'cron', hour=20, minute=59)
     scheduler.start()
 
     # Запускаем Flask сервер
