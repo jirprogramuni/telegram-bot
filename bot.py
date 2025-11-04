@@ -10,6 +10,7 @@ import io
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from apscheduler.schedulers.background import BackgroundScheduler
+import zoneinfo
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -37,6 +38,11 @@ creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
 client = gspread.authorize(creds)
 SHEET_ID = '1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg'  # ID таблицы
 sheet = client.open_by_key(SHEET_ID)
+
+# Helper to escape special chars for MarkdownV2
+def escape_md_v2(text):
+    special_chars = r'_*[]()~`>#+-=|{}.!'
+    return ''.join(['\\' + char if char in special_chars else char for char in text])
 
 
 # Функция для проверки регистрации пользователя
@@ -77,6 +83,10 @@ def add_to_sheet(name, user_id):
 # Функция для чтения данных о зарплате и часах
 def get_salary_data(month_sheet, telegram_id):
     try:
+        registered, name = is_registered(telegram_id)
+        if not registered:
+            return None, None, None, None, None, None, None
+
         response = requests.get(EXCEL_URL)
         if response.status_code != 200:
             logging.error(f"Ошибка загрузки файла: {response.status_code}")
@@ -85,13 +95,12 @@ def get_salary_data(month_sheet, telegram_id):
         file_like = io.BytesIO(response.content)
         df = pd.read_excel(file_like, sheet_name=month_sheet, engine='openpyxl')
 
-        # Ищем строку по Telegram ID (столбец B, индекс 1)
-        row = df[df.iloc[:, 1] == telegram_id]
+        # Ищем строку по имени (столбец A, индекс 0)
+        row = df[df.iloc[:, 0] == name]
 
         if row.empty:
             return None, None, None, None, None, None, None
 
-        name = row.iloc[0, 0]  # Столбец A - имя
         columns = df.columns
         hours_first_col = columns.get_loc('Общие часы 1 половина') if 'Общие часы 1 половина' in columns else None
         hours_second_col = columns.get_loc('Общие часы 2 половина') if 'Общие часы 2 половина' in columns else None
@@ -186,6 +195,12 @@ def get_tabel_data(user_name, month_sheet):
 # Функция для отправки напоминаний
 def send_reminders():
     try:
+        tz = zoneinfo.ZoneInfo("Europe/Moscow")
+        now = datetime.now(tz=tz)
+        tomorrow = now + timedelta(days=1)
+        month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+        month_sheet = month_names[tomorrow.month - 1]
+
         # Загрузка списка сотрудников
         response = requests.get(EXCEL_URL)
         if response.status_code != 200:
@@ -201,12 +216,6 @@ def send_reminders():
             tid = df_emp.iloc[i, 1]
             if pd.notna(tid):
                 name_to_id[name] = int(tid)
-
-        # Определение завтрашней даты
-        now = datetime.now()
-        tomorrow = now + timedelta(days=1)
-        month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
-        month_sheet = month_names[tomorrow.month - 1]
 
         # Словарь для родительного падежа месяцев
         month_genitive = {
@@ -225,7 +234,7 @@ def send_reminders():
         }
 
         base = datetime(1899, 12, 30)
-        serial_tomorrow = (tomorrow - base).days
+        serial_tomorrow = (tomorrow.date() - base.date()).days
 
         # Загрузка табеля
         response = requests.get(TABEL_URL)
@@ -250,9 +259,15 @@ def send_reminders():
         shift_row = None
         for r in range(1, df_tabel.shape[0]):
             s = df_tabel.iloc[r, 1]
-            if isinstance(s, (int, float)) and int(s) == serial_tomorrow:
-                shift_row = r
-                break
+            if isinstance(s, datetime):
+                serial_from_sheet = (s.date() - base.date()).days
+                if serial_from_sheet == serial_tomorrow:
+                    shift_row = r
+                    break
+            elif isinstance(s, (int, float)):
+                if int(s) == serial_tomorrow:
+                    shift_row = r
+                    break
 
         if shift_row is None:
             logging.info("Нет смен на завтра")
@@ -284,9 +299,9 @@ def get_main_menu_markup(registered):
             InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"),
             InlineKeyboardButton("Мой табель 📅", callback_data="tabel")
         )
-    markup.add(
-        InlineKeyboardButton("Заполнить форму 📝", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse")
-    )
+        markup.add(
+            InlineKeyboardButton("Заполнить форму 📝", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse")
+        )
     return markup
 
 
@@ -362,8 +377,9 @@ def callback_query(call):
         bot.answer_callback_query(call.id)
 
         # Определяем текущий месяц
+        tz = zoneinfo.ZoneInfo("Europe/Moscow")
         month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
-        current_month = month_names[datetime.now().month - 1]
+        current_month = month_names[datetime.now(tz=tz).month - 1]
 
         shifts = get_tabel_data(name, current_month)
 
@@ -534,8 +550,8 @@ def handle_text(message):
         # Отправляем пользователю
         bot.send_message(
             user_id,
-            f"*Заявка на регистрацию отправлена! 🎉*\n\nВаше имя: {name}\nОжидайте подтверждения от админа.",
-            parse_mode='Markdown'
+            f"*Заявка на регистрацию отправлена\\!* 🎉\n\nВаше имя: {escape_md_v2(name)}\nОжидайте подтверждения от админа\\.",
+            parse_mode='MarkdownV2'
         )
         # Отправляем админу с кнопками
         markup = InlineKeyboardMarkup()
@@ -543,16 +559,25 @@ def handle_text(message):
             InlineKeyboardButton("Подтвердить ✅", callback_data=f"confirm_{user_id}"),
             InlineKeyboardButton("Отклонить ❌", callback_data=f"reject_{user_id}")
         )
+        admin_msg = f"*Новая регистрация\\!* 📋\n\nИмя: {escape_md_v2(name)}\nUsername: @{escape_md_v2(username)}\nID: {user_id}"
         try:
             # Используем send_message с reply_markup
             bot.send_message(
                 ADMIN_ID,
-                f"*Новая регистрация! 📋*\n\nИмя: {name}\nUsername: @{username}\nID: {user_id}",
-                parse_mode='Markdown',
+                admin_msg,
+                parse_mode='MarkdownV2',
                 reply_markup=markup  # <-- Убедись, что reply_markup передан правильно
             )
+        except telebot.apihelper.ApiTelegramException as e:
+            logging.error(f"Telegram API error sending to admin: {e} (user_id={user_id}, name={name})")
+            # Fallback: send without parse_mode if Markdown fails (rare now with escaping)
+            bot.send_message(
+                ADMIN_ID,
+                admin_msg.replace('*', '').replace('\\', ''),  # Strip formatting as fallback
+                reply_markup=markup
+            )
         except Exception as e:
-            logging.error(f"Ошибка отправки админу: {e}")
+            logging.error(f"Unexpected error sending to admin: {e} (user_id={user_id}, name={name})")
         # Сбрасываем состояние
         del user_states[user_id]
 
@@ -584,8 +609,8 @@ if __name__ == '__main__':
     bot.set_webhook(url='https://telegram-bot-1-ydll.onrender.com')  # Замени на свой URL Render
 
     # Запускаем scheduler для напоминаний
-    scheduler = BackgroundScheduler(timezone="Europe/Moscow")  # Укажите нужный timezone
-    scheduler.add_job(send_reminders, 'cron', hour=20, minute=0)
+    scheduler = BackgroundScheduler(timezone=zoneinfo.ZoneInfo("Europe/Moscow"))  # Укажите нужный timezone
+    scheduler.add_job(send_reminders, 'cron', hour=20, minute=58)
     scheduler.start()
 
     # Запускаем Flask сервер
