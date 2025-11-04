@@ -284,9 +284,9 @@ def get_main_menu_markup(registered):
             InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"),
             InlineKeyboardButton("Мой табель 📅", callback_data="tabel")
         )
-        markup.add(
-            InlineKeyboardButton("Заполнить форму 📝", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse")
-        )
+    markup.add(
+        InlineKeyboardButton("Заполнить форму", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse")
+    )
     return markup
 
 
@@ -302,10 +302,6 @@ def get_month_menu_markup():
     return markup
 
 
-# Путь к локальному файлу изображения (предполагаю .jpg; если GIF, измени на .gif и используй send_animation)
-photo_path = 'photo_2025-10-28_01-49-34.jpg'
-
-
 # Обработчик /start
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -319,15 +315,13 @@ def start(message):
 
     markup = get_main_menu_markup(registered)
 
-    # Отправляем изображение из локального файла с caption и меню
-    with open(photo_path, 'rb') as photo:
-        bot.send_photo(
-            message.chat.id,
-            photo=photo,
-            caption=welcome_msg,
-            parse_mode='Markdown',
-            reply_markup=markup
-        )
+    bot.send_photo(
+        message.chat.id,
+        photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+        caption=welcome_msg,
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
 
 
 # Обработчик нажатия кнопок
@@ -384,21 +378,21 @@ def callback_query(call):
             parse_mode='Markdown'
         )
 
-        # Reset the menu message back to main (with photo)
+        # Reset the menu message back to main
         if registered:
             welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
         else:
             welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
 
         markup = get_main_menu_markup(registered)
-        with open(photo_path, 'rb') as photo:
-            bot.send_photo(
-                call.message.chat.id,
-                photo=photo,
-                caption=welcome_msg,
-                parse_mode='Markdown',
-                reply_markup=markup
-            )
+
+        bot.send_photo(
+            call.message.chat.id,
+            photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+            caption=welcome_msg,
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
 
     elif call.data.startswith("month_"):
         month = call.data.split("_")[1]
@@ -425,21 +419,21 @@ def callback_query(call):
             parse_mode='Markdown'
         )
 
-        # Reset the menu message back to main (with photo)
+        # Reset the menu message back to main
         if registered:
             welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
         else:
             welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
 
         markup = get_main_menu_markup(registered)
-        with open(photo_path, 'rb') as photo:
-            bot.send_photo(
-                call.message.chat.id,
-                photo=photo,
-                caption=welcome_msg,
-                parse_mode='Markdown',
-                reply_markup=markup
-            )
+
+        bot.send_photo(
+            call.message.chat.id,
+            photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+            caption=welcome_msg,
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
 
     elif call.data == "back_to_menu":
         bot.answer_callback_query(call.id)
@@ -449,14 +443,14 @@ def callback_query(call):
             welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
 
         markup = get_main_menu_markup(registered)
-        with open(photo_path, 'rb') as photo:
-            bot.send_photo(
-                call.message.chat.id,
-                photo=photo,
-                caption=welcome_msg,
-                parse_mode='Markdown',
-                reply_markup=markup
-            )
+
+        bot.send_photo(
+            call.message.chat.id,
+            photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+            caption=welcome_msg,
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
 
     elif call.data.startswith("confirm_"):
         if user_id != ADMIN_ID:
@@ -484,14 +478,13 @@ def callback_query(call):
                     "*Ваша регистрация подтверждена! 🎉*",
                     parse_mode='Markdown'
                 )
-                with open(photo_path, 'rb') as photo:
-                    bot.send_photo(
-                        confirm_user_id,
-                        photo=photo,
-                        caption=welcome_msg,
-                        parse_mode='Markdown',
-                        reply_markup=markup
-                    )
+                bot.send_photo(
+                    confirm_user_id,
+                    photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+                    caption=welcome_msg,
+                    parse_mode='Markdown',
+                    reply_markup=markup
+                )
             else:
                 # Если админ забыл добавить в Sheets
                 bot.send_message(
