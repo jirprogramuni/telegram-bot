@@ -289,9 +289,9 @@ def get_main_menu_markup(registered):
             InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"),
             InlineKeyboardButton("Мой табель 📅", callback_data="tabel")
         )
-    markup.add(
-        InlineKeyboardButton("Заполнить форму 📝", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse")
-    )
+        markup.add(
+            InlineKeyboardButton("Заполнить форму 📝", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse")
+        )
     return markup
 
 
