@@ -285,7 +285,7 @@ def get_main_menu_markup(registered):
             InlineKeyboardButton("Мой табель 📅", callback_data="tabel")
         )
     markup.add(
-        InlineKeyboardButton("Заполнить форму", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse")
+        InlineKeyboardButton("Заполнить форму 📝", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse")
     )
     return markup
 
@@ -347,8 +347,8 @@ def callback_query(call):
             bot.answer_callback_query(call.id, "Вы не зарегистрированы! Сначала зарегистрируйтесь.")
             return
         bot.answer_callback_query(call.id)
-        bot.edit_message_text(
-            "*Выберите месяц для просмотра зарплаты:* 📅",
+        bot.edit_message_caption(
+            caption="*Выберите месяц для просмотра зарплаты:* 📅",
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             parse_mode='Markdown',
@@ -386,10 +386,10 @@ def callback_query(call):
 
         markup = get_main_menu_markup(registered)
 
-        bot.send_photo(
-            call.message.chat.id,
-            photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+        bot.edit_message_caption(
             caption=welcome_msg,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
             parse_mode='Markdown',
             reply_markup=markup
         )
@@ -427,10 +427,10 @@ def callback_query(call):
 
         markup = get_main_menu_markup(registered)
 
-        bot.send_photo(
-            call.message.chat.id,
-            photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+        bot.edit_message_caption(
             caption=welcome_msg,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
             parse_mode='Markdown',
             reply_markup=markup
         )
@@ -444,10 +444,10 @@ def callback_query(call):
 
         markup = get_main_menu_markup(registered)
 
-        bot.send_photo(
-            call.message.chat.id,
-            photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+        bot.edit_message_caption(
             caption=welcome_msg,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
             parse_mode='Markdown',
             reply_markup=markup
         )
