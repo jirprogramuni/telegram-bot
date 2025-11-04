@@ -38,6 +38,11 @@ client = gspread.authorize(creds)
 SHEET_ID = '1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg'  # ID таблицы
 sheet = client.open_by_key(SHEET_ID)
 
+# Helper to escape special chars for MarkdownV2
+def escape_md_v2(text):
+    special_chars = r'_*[]()~`>#+-=|{}.!'
+    return ''.join(['\\' + char if char in special_chars else char for char in text])
+
 
 # Функция для проверки регистрации пользователя
 def is_registered(user_id):
@@ -534,8 +539,8 @@ def handle_text(message):
         # Отправляем пользователю
         bot.send_message(
             user_id,
-            f"*Заявка на регистрацию отправлена! 🎉*\n\nВаше имя: {name}\nОжидайте подтверждения от админа.",
-            parse_mode='Markdown'
+            f"*Заявка на регистрацию отправлена\\!* 🎉\n\nВаше имя: {escape_md_v2(name)}\nОжидайте подтверждения от админа\\.",
+            parse_mode='MarkdownV2'
         )
         # Отправляем админу с кнопками
         markup = InlineKeyboardMarkup()
@@ -543,16 +548,25 @@ def handle_text(message):
             InlineKeyboardButton("Подтвердить ✅", callback_data=f"confirm_{user_id}"),
             InlineKeyboardButton("Отклонить ❌", callback_data=f"reject_{user_id}")
         )
+        admin_msg = f"*Новая регистрация\\!* 📋\n\nИмя: {escape_md_v2(name)}\nUsername: @{escape_md_v2(username)}\nID: {user_id}"
         try:
             # Используем send_message с reply_markup
             bot.send_message(
                 ADMIN_ID,
-                f"*Новая регистрация! 📋*\n\nИмя: {name}\nUsername: @{username}\nID: {user_id}",
-                parse_mode='Markdown',
+                admin_msg,
+                parse_mode='MarkdownV2',
                 reply_markup=markup  # <-- Убедись, что reply_markup передан правильно
             )
+        except telebot.apihelper.ApiTelegramException as e:
+            logging.error(f"Telegram API error sending to admin: {e} (user_id={user_id}, name={name})")
+            # Fallback: send without parse_mode if Markdown fails (rare now with escaping)
+            bot.send_message(
+                ADMIN_ID,
+                admin_msg.replace('*', '').replace('\\', ''),  # Strip formatting as fallback
+                reply_markup=markup
+            )
         except Exception as e:
-            logging.error(f"Ошибка отправки админу: {e}")
+            logging.error(f"Unexpected error sending to admin: {e} (user_id={user_id}, name={name})")
         # Сбрасываем состояние
         del user_states[user_id]
 
