@@ -599,7 +599,7 @@ if __name__ == '__main__':
 
     # Запускаем scheduler для напоминаний
     scheduler = BackgroundScheduler(timezone="Europe/Moscow")  # Укажите нужный timezone
-    scheduler.add_job(send_reminders, 'cron', hour=20, minute=26)
+    scheduler.add_job(send_reminders, 'cron', hour=20, minute=40)
     scheduler.start()
 
     # Запускаем Flask сервер
