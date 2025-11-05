@@ -709,8 +709,127 @@ def webhook():
         return ''
     else:
         flask.abort(403)
+# === НОВЫЕ МАРШРУТЫ ДЛЯ MINI APP ===
+@app.route('/get-shifts', methods=['GET'])
+def get_shifts():
+    """
+    Возвращает все смены пользователя за указанный месяц
+    Пример: /get-shifts?user_id=476747112&month=2025-11
+    """
+    user_id = flask.request.args.get('user_id')
+    month = flask.request.args.get('month')  # формат: YYYY-MM
 
+    if not user_id or not month:
+        return flask.jsonify({"error": "user_id и month обязательны"}), 400
+
+    try:
+        worksheet = client.open_by_key(SHEET_ID).worksheet("Сырые ответы формы ТГ")
+        records = worksheet.get_all_records()
+        shifts = {}
+
+        for rec in records:
+            tid = str(rec.get('Telegram ID', '')).strip()
+            date_raw = rec.get('Дата смены', '').strip()
+
+            if tid != user_id or not date_raw:
+                continue
+
+            # Приводим "05.11.2025" → "2025-11-05"
+            try:
+                date_obj = datetime.strptime(date_raw, "%d.%m.%Y")
+                date_str = date_obj.strftime("%Y-%m-%d")
+            except:
+                continue
+
+            # Проверяем, что дата в нужном месяце
+            if not date_str.startswith(month):
+                continue
+
+            shifts[date_str] = {
+                "point": rec.get('Заведение', '').strip(),
+                "time_in": rec.get('Время прихода', '').strip(),
+                "time_out": rec.get('Время ухода', '').strip(),
+                "total_hours": str(rec.get('Всего часов', '')).strip()
+            }
+
+        return flask.jsonify({"shifts": shifts})
+
+    except Exception as e:
+        logging.error(f"[get-shifts] Ошибка: {e}")
+        return flask.jsonify({"shifts": {}}), 500
+
+        @app.route('/save-shift', methods=['POST'])
+def save_shift():
+    """
+    Сохраняет смену от Mini App
+    {
+        "telegram_id": 476747112,
+        "date": "2025-11-05",
+        "point": "КУЧИНО",
+        "time_in": "09:00",
+        "time_out": "18:00",
+        "total_hours": "9.0"
+    }
+    """
+    data = flask.request.get_json(silent=True)
+    if not data:
+        return flask.jsonify({"success": False, "error": "Нет данных"}), 400
+
+    telegram_id = str(data.get('telegram_id'))
+    date_str = data.get('date')  # YYYY-MM-DD
+    point = data.get('point')
+    time_in = data.get('time_in')
+    time_out = data.get('time_out')
+    total_hours = data.get('total_hours')
+
+    if not all([telegram_id, date_str, point, time_in, time_out]):
+        return flask.jsonify({"success": False, "error": "Недостаточно данных"}), 400
+
+    try:
+        # Проверка: можно ли редактировать?
+        already_exists = shift_exists(telegram_id, date_str)
+        can_edit = not already_exists or has_edit_permission(telegram_id, date_str)
+
+        # Определяем статус
+        if already_exists and not can_edit:
+            return flask.jsonify({
+                "success": False,
+                "error": "Смена уже зафиксирована. Запроси изменение у админа."
+            }), 403
+
+        status = "Зафиксировано"
+        if already_exists and can_edit:
+            status = "Смена не защищена"  # админ разрешил редактировать
+
+        # Сохраняем в Google Sheets
+        success = save_shift_to_sheet(
+            telegram_id=telegram_id,
+            username=None,  # в Mini App юзернейм не нужен
+            date_str=date_str,
+            point=point,
+            time_in=time_in,
+            time_out=time_out,
+            total_hours=total_hours,
+            status=status
+        )
+
+        if success:
+            # Если это редактирование — можно выдать разрешение (на всякий)
+            if already_exists:
+                grant_edit_permission(telegram_id, date_str)
+
+            return flask.jsonify({"success": True})
+        else:
+            return flask.jsonify({"success": False, "error": "Ошибка записи в таблицу"}), 500
+
+    except Exception as e:
+        logging.error(f"[save-shift] Ошибка: {e}")
+        return flask.jsonify({"success": False, "error": "Серверная ошибка"}), 500
+        
 if __name__ == '__main__':
+   
+
+
     bot.remove_webhook()
     bot.set_webhook(url='https://telegram-bot-1-ydll.onrender.com')
     scheduler = BackgroundScheduler(timezone=zoneinfo.ZoneInfo("Europe/Moscow"))
@@ -718,3 +837,5 @@ if __name__ == '__main__':
     scheduler.start()
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
+    
