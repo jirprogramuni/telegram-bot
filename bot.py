@@ -826,16 +826,99 @@ def save_shift():
         logging.error(f"[save-shift] Ошибка: {e}")
         return flask.jsonify({"success": False, "error": "Серверная ошибка"}), 500
         
-return flask.jsonify
-   
+@app.route('/get-shifts', methods=['GET'])
+def get_shifts():
+    user_id = flask.request.args.get('user_id')
+    month = flask.request.args.get('month')
+
+    if not user_id or not month:
+        return flask.jsonify({"error": "user_id и month обязательны"}), 400
+
+    try:
+        worksheet = client.open_by_key(SHEET_ID).worksheet("Сырые ответы формы ТГ")
+        records = worksheet.get_all_records()
+        shifts = {}
+
+        for rec in records:
+            tid = str(rec.get('Telegram ID', '')).strip()
+            date_raw = rec.get('Дата смены', '').strip()
+
+            if tid != user_id or not date_raw:
+                continue
+
+            try:
+                date_obj = datetime.strptime(date_raw, "%d.%m.%Y")
+                date_str = date_obj.strftime("%Y-%m-%d")
+            except:
+                continue
+
+            if not date_str.startswith(month):
+                continue
+
+            shifts[date_str] = {
+                "point": rec.get('Заведение', '').strip(),
+                "time_in": rec.get('Время прихода', '').strip(),
+                "time_out": rec.get('Время ухода', '').strip(),
+                "total_hours": str(rec.get('Всего часов', '')).strip()
+            }
+
+        return flask.jsonify({"shifts": shifts})
+
+    except Exception as e:
+        logging.error(f"[get-shifts] Ошибка: {e}")
+        return flask.jsonify({"shifts": {}}), 500
 
 
-    bot.remove_webhook()
-    bot.set_webhook(url='https://telegram-bot-1-ydll.onrender.com')
-    scheduler = BackgroundScheduler(timezone=zoneinfo.ZoneInfo("Europe/Moscow"))
-    scheduler.add_job(send_reminders, 'cron', hour=20, minute=58)
-    scheduler.start()
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+@app.route('/save-shift', methods=['POST'])
+def save_shift():
+    data = flask.request.get_json(silent=True)
+    if not data:
+        return flask.jsonify({"success": False, "error": "Нет данных"}), 400
+
+    telegram_id = str(data.get('telegram_id'))
+    date_str = data.get('date')
+    point = data.get('point')
+    time_in = data.get('time_in')
+    time_out = data.get('time_out')
+    total_hours = data.get('total_hours')
+
+    if not all([telegram_id, date_str, point, time_in, time_out]):
+        return flask.jsonify({"success": False, "error": "Недостаточно данных"}), 400
+
+    try:
+        already_exists = shift_exists(telegram_id, date_str)
+        can_edit = not already_exists or has_edit_permission(telegram_id, date_str)
+
+        if already_exists and not can_edit:
+            return flask.jsonify({
+                "success": False,
+                "error": "Смена уже зафиксирована. Запроси изменение у админа."
+            }), 403
+
+        status = "Зафиксировано"
+        if already_exists and can_edit:
+            status = "Смена не защищена"
+
+        success = save_shift_to_sheet(
+            telegram_id=telegram_id,
+            username=None,
+            date_str=date_str,
+            point=point,
+            time_in=time_in,
+            time_out=time_out,
+            total_hours=total_hours,
+            status=status
+        )
+
+        if success:
+            if already_exists:
+                grant_edit_permission(telegram_id, date_str)
+            return flask.jsonify({"success": True})
+        else:
+            return flask.jsonify({"success": False, "error": "Ошибка записи"}), 500
+
+    except Exception as e:
+        logging.error(f"[save-shift] Ошибка: {e}")
+        return flask.jsonify({"success": False, "error": "Серверная ошибка"}), 500
 
     
