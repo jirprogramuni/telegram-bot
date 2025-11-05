@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+<script>eruda.init();</script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Мои Смены</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    body { font-family: sans-serif; padding: 20px; background: #f5f5f5; }
+    .header { text-align: center; margin-bottom: 20px; }
+    .calendar { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+    .day-name { background: #eee; padding: 10px; text-align: center; font-weight: bold; border-radius: 8px; }
+    .day { background: white; padding: 15px; text-align: center; border-radius: 8px; cursor: pointer; }
+    .day.has-shift { background: #c8e6c9; }
+    .day.today { background: #e3f2fd; font-weight: bold; }
+    .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); justify-content: center; align-items: center; }
+    .modal-content { background: white; padding: 20px; border-radius: 12px; width: 90%; max-width: 400px; }
+    input, select, button { width: 100%; padding: 10px; margin: 8px 0; border: 1px solid #ddd; border-radius: 8px; }
+    .btn { background: #0088cc; color: white; border: none; cursor: pointer; }
+    .btn-close { background: #ddd; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h2>Мои Смены</h2>
+    <p>ID: <span id="user-id">...</span></p>
+  </div>
+  <div id="calendar"></div>
+
+  <div class="modal" id="modal">
+    <div class="modal-content">
+      <h3 id="title">Новая смена</h3>
+      <input type="hidden" id="date">
+      <select id="point"><option value="">Заведение</option><option>КУЧИНО</option><option>РЕУТОВ (Победы)</option><option>ЛЕНИНА</option><option>НЯМС</option><option>РЕУТОВ (Юбилейный)</option></select>
+      <input id="in" placeholder="Приход (09:00)">
+      <input id="out" placeholder="Уход (18:00)">
+      <button class="btn" onclick="save()">Сохранить</button>
+      <button class="btn btn-close" onclick="closeM()">Отмена</button>
+    </div>
+  </div>
+
+  <script>
+    const tg = window.Telegram.WebApp; tg.ready(); tg.expand();
+    const BACKEND = 'https://telegram-bot-1-ydll.onrender.com';
+    const userId = tg.initDataUnsafe.user?.id || 'unknown';
+    document.getElementById('user-id').innerText = userId;
+
+    let month = new Date(), shifts = {};
+
+    function render() {
+      const y = month.getFullYear(), m = month.getMonth();
+      document.querySelector('h2').innerText = `${['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'][m]} ${y}`;
+      const cal = document.getElementById('calendar'); cal.innerHTML = '';
+      ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].forEach(d => { const el = document.createElement('div'); el.className='day-name'; el.innerText=d; cal.appendChild(el); });
+      const first = new Date(y, m, 1).getDay();
+      const days = new Date(y, m+1, 0).getDate();
+      for (let i = 0; i < (first===0?6:first-1); i++) cal.appendChild(document.createElement('div'));
+      for (let d=1; d<=days; d++) {
+        const date = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+        const el = document.createElement('div'); el.className='day';
+        if (shifts[date]) el.classList.add('has-shift');
+        if (d===new Date().getDate() && m===new Date().getMonth() && y===new Date().getFullYear()) el.classList.add('today');
+        el.innerText = d; el.onclick = () => openModal(date, shifts[date]);
+        cal.appendChild(el);
+      }
+    }
+
+    async function load() {
+      const y = month.getFullYear(), m = String(month.getMonth()+1).padStart(2,'0');
+      const res = await fetch(`${BACKEND}/get-shifts?user_id=${userId}&month=${y}-${m}`);
+      shifts = (await res.json()).shifts || {};
+      render();
+    }
+
+    function openModal(date, s) {
+      document.getElementById('date').value = date;
+      document.getElementById('title').innerText = s ? 'Редактировать' : 'Новая смена';
+      document.getElementById('point').value = s?.point || '';
+      document.getElementById('in').value = s?.time_in || '';
+      document.getElementById('out').value = s?.time_out || '';
+      document.getElementById('modal').style.display = 'flex';
+    }
+
+    function closeM() { document.getElementById('modal').style.display = 'none'; }
+
+    async function save() {
+      const date = document.getElementById('date').value;
+      const point = document.getElementById('point').value;
+      const tin = document.getElementById('in').value;
+      const tout = document.getElementById('out').value;
+      if (!point || !tin || !tout) return alert('Заполни всё!');
+      const [h1,m1] = tin.split(':'), [h2,m2] = tout.split(':');
+      const hours = ((h2*60 + +m2) - (h1*60 + +m1)) / 60;
+      if (hours <= 0) return alert('Неверное время');
+      const res = await fetch(`${BACKEND}/save-shift`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({telegram_id:userId, date, point, time_in:tin, time_out:tout, total_hours:hours.toFixed(1)}) });
+      if ((await res.json()).success) { closeM(); load(); } else alert('Ошибка');
+    }
+
+    document.querySelector('h2').onclick = () => { month = new Date(month.getFullYear(), month.getMonth()+1); load(); };
+    load();
+  </script>
+</body>
+</html>
