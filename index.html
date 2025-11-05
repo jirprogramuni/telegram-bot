@@ -1,29 +1,29 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <title>Мои Смены</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <style>
-        body { font-family: Arial; padding: 20px; }
-        button { background: #0088cc; color: white; padding: 10px; border: none; border-radius: 5px; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Мои Смены</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    body { font-family: sans-serif; padding: 20px; text-align: center; background: #f5f5f5; }
+    .container { max-width: 400px; margin: 0 auto; background: white; padding: 20px; border-radius: 12px; }
+    .btn { padding: 12px 20px; margin-top: 20px; background: #0088cc; color: white; border: none; border-radius: 8px; cursor: pointer; width: 100%; }
+  </style>
 </head>
 <body>
-    <h1>Привет! Выбери смену 📅</h1>
+  <div class="container">
+    <h1>Мои Смены 📅</h1>
     <p>ID: <span id="user-id"></span></p>
-    <button onclick="closeApp()">Закрыть</button>
-    <script>
-        // Инициализация Telegram Mini App
-        Telegram.WebApp.ready();
-        Telegram.WebApp.expand();
+    <button class="btn" id="close-btn">Закрыть приложение</button>
+  </div>
 
-        // Получаем данные юзера
-        document.getElementById('user-id').innerText = Telegram.WebApp.initDataUnsafe.user ? Telegram.WebApp.initDataUnsafe.user.id : 'Неизвестно';
-
-        function closeApp() {
-            Telegram.WebApp.close();
-        }
-    </script>
+  <script>
+    const tg = window.Telegram.WebApp;
+    tg.ready();
+    tg.expand();
+    document.getElementById('user-id').innerText = tg.initDataUnsafe.user?.id || 'unknown';
+    document.getElementById('close-btn').onclick = () => tg.close();
+  </script>
 </body>
 </html>
