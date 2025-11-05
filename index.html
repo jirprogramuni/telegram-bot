@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Мои Смены</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: Arial; padding: 20px; }
+        button { background: #0088cc; color: white; padding: 10px; border: none; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Привет! Выбери смену 📅</h1>
+    <p>ID: <span id="user-id"></span></p>
+    <button onclick="closeApp()">Закрыть</button>
+    <script>
+        // Инициализация Telegram Mini App
+        Telegram.WebApp.ready();
+        Telegram.WebApp.expand();
+
+        // Получаем данные юзера
+        document.getElementById('user-id').innerText = Telegram.WebApp.initDataUnsafe.user ? Telegram.WebApp.initDataUnsafe.user.id : 'Неизвестно';
+
+        function closeApp() {
+            Telegram.WebApp.close();
+        }
+    </script>
+</body>
+</html>
