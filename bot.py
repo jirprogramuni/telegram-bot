@@ -261,8 +261,9 @@ def send_reminders():
         for i in range(len(df_emp)):
             name = str(df_emp.iloc[i, 0]).strip()
             tid = df_emp.iloc[i, 1]
-            if pd.notna(tid):
-                name_to_id[name] = int(tid)
+            if pd.isna(tid):
+                continue
+            name_to_id[name] = int(tid)
         month_genitive = {
             'Январь': 'января', 'Февраль': 'февраля', 'Март': 'марта', 'Апрель': 'апреля',
             'Май': 'мая', 'Июнь': 'июня', 'Июль': 'июля', 'Август': 'августа',
