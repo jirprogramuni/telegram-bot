@@ -826,7 +826,7 @@ def save_shift():
         logging.error(f"[save-shift] Ошибка: {e}")
         return flask.jsonify({"success": False, "error": "Серверная ошибка"}), 500
         
-if __name__ == '__main__':
+return flask.jsonify
    
 
 
