@@ -1,6 +1,8 @@
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import flask
+from flask import jsonify
+from flask_cors import CORS
 import os
 import logging
 import pandas as pd
@@ -10,65 +12,148 @@ import io
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from apscheduler.schedulers.background import BackgroundScheduler
+import zoneinfo
 import calendar
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Токен бота и ID админа
-BOT_TOKEN = '7478861606:AAF-7eV0XjTn7S_6Q_caIk7Y27kGsfU_f-A'  # Замени на свой токен
-ADMIN_ID = 476747112  # Замени на свой user ID (число)
-
+BOT_TOKEN = '7478861606:AAF-7eV0XjTn7S_6Q_caIk7Y27kGsfU_f-A'
+ADMIN_ID = 476747112
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Словарь для хранения состояний пользователей
 user_states = {}
+pending_users = {}
+shift_data = {}
 
-# Словарь для pending регистраций
-pending_users = {}  # {user_id: name}
+WORK_POINTS = [
+    "КУЧИНО",
+    "РЕУТОВ (Победы)",
+    "ЛЕНИНА",
+    "НЯМС",
+    "РЕУТОВ (Юбилейный)"
+]
 
-# URL для экспорта Google Sheets в формате XLSX (для чтения)
 EXCEL_URL = 'https://docs.google.com/spreadsheets/d/1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg/export?format=xlsx'
 TABEL_URL = 'https://docs.google.com/spreadsheets/d/1q6Rqx3ypWYZAD74MdH-iz-tN5aAANrnDglLysvHg9_8/export?format=xlsx'
 
-# Для записи в Google Sheets (нужны credentials.json, загрузи на Render)
 SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-CREDS_FILE = 'credentials.json'  # Загрузи service account JSON
+CREDS_FILE = 'credentials.json'
 creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
 client = gspread.authorize(creds)
-SHEET_ID = '1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg'  # ID таблицы
+SHEET_ID = '1SsG4uRtpslwSeZFZsIjWOAesrHvT6WhxrNoCgYRTUfg'
 sheet = client.open_by_key(SHEET_ID)
 
-month_names = {
-    1: 'Январь', 2: 'Февраль', 3: 'Март', 4: 'Апрель', 5: 'Май', 6: 'Июнь',
-    7: 'Июль', 8: 'Август', 9: 'Сентябрь', 10: 'Октябрь', 11: 'Ноябрь', 12: 'Декабрь'
-}
+def escape_md_v2(text):
+    if not text:
+        return ""
+    special_chars = r'_*[]()~`>#+-=|{}.!'
+    return ''.join(['\\' + char if char in special_chars else char for char in str(text)])
 
-# Функция для проверки регистрации пользователя
+def shift_exists(telegram_id, date_str):
+    try:
+        worksheet = client.open_by_key(SHEET_ID).worksheet("Сырые ответы формы ТГ")
+        records = worksheet.get_all_records()
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        formatted_date = date_obj.strftime("%d.%m.%Y")
+        for rec in records:
+            if str(rec.get('Telegram ID', '')) == str(telegram_id) and rec.get('Дата смены', '') == formatted_date:
+                return True
+        return False
+    except Exception as e:
+        logging.error(f"Ошибка проверки смены: {e}")
+        return False
+
+def has_edit_permission(telegram_id, date_str):
+    try:
+        worksheet = client.open_by_key(SHEET_ID).worksheet("Разрешения")
+        records = worksheet.get_all_records()
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        formatted_date = date_obj.strftime("%d.%m.%Y")
+        for rec in records:
+            if str(rec.get('Telegram ID', '')) == str(telegram_id) and \
+               rec.get('Дата смены', '') == formatted_date and \
+               rec.get('Статус', '') == "активно":
+                return True
+        return False
+    except Exception as e:
+        logging.error(f"Ошибка проверки разрешения: {e}")
+        return False
+
+def grant_edit_permission(telegram_id, date_str):
+    try:
+        worksheet = client.open_by_key(SHEET_ID).worksheet("Разрешения")
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        formatted_date = date_obj.strftime("%d.%m.%Y")
+        worksheet.append_row([telegram_id, formatted_date, "активно"])
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка выдачи разрешения: {e}")
+        return False
+
+def save_shift_to_sheet(telegram_id, username, date_str, point, time_in, time_out, total_hours, status="Зафиксировано"):
+    try:
+        worksheet = client.open_by_key(SHEET_ID).worksheet("Сырые ответы формы ТГ")
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        formatted_date = date_obj.strftime("%d.%m.%Y")
+        safe_username = f"@{username}" if username else ""
+        worksheet.append_row([
+            safe_username,
+            telegram_id,
+            formatted_date,
+            point,
+            time_in,
+            time_out,
+            total_hours,
+            status
+        ])
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка записи смены: {e}")
+        return False
+
+def generate_calendar(year, month):
+    markup = InlineKeyboardMarkup()
+    month_name = calendar.month_name[month].capitalize()
+    markup.add(InlineKeyboardButton(f"{month_name} {year}", callback_data="ignore"))
+    week_days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    markup.row(*[InlineKeyboardButton(day, callback_data="ignore") for day in week_days])
+    cal = calendar.monthcalendar(year, month)
+    for week in cal:
+        row = []
+        for day in week:
+            if day == 0:
+                row.append(InlineKeyboardButton(" ", callback_data="ignore"))
+            else:
+                row.append(InlineKeyboardButton(str(day), callback_data=f"date_{year}-{month:02d}-{day:02d}"))
+        markup.row(*row)
+    prev_month = month - 1 if month > 1 else 12
+    prev_year = year if month > 1 else year - 1
+    next_month = month + 1 if month < 12 else 1
+    next_year = year if month < 12 else year + 1
+    markup.row(
+        InlineKeyboardButton("◀️", callback_data=f"cal_{prev_year}_{prev_month}"),
+        InlineKeyboardButton("Назад 🔙", callback_data="back_to_menu"),
+        InlineKeyboardButton("▶️", callback_data=f"cal_{next_year}_{next_month}")
+    )
+    return markup
+
 def is_registered(user_id):
     try:
         response = requests.get(EXCEL_URL)
         if response.status_code != 200:
             logging.error(f"Ошибка загрузки файла: {response.status_code}")
             return False, None
-
         file_like = io.BytesIO(response.content)
         df = pd.read_excel(file_like, sheet_name="Список сотрудников", engine='openpyxl')
-
-        # Ищем строку по Telegram ID (столбец B, индекс 1)
         row = df[df.iloc[:, 1] == user_id]
-
         if row.empty:
             return False, None
-
-        name = row.iloc[0, 0]  # Столбец A - имя
+        name = row.iloc[0, 0]
         return True, name
     except Exception as e:
         logging.error(f"Ошибка проверки регистрации: {e}")
         return False, None
 
-
-# Функция для добавления в sheet (оставляем, но не используем в confirm, чтобы админ добавлял вручную)
 def add_to_sheet(name, user_id):
     try:
         worksheet = sheet.worksheet("Список сотрудников")
@@ -78,57 +163,45 @@ def add_to_sheet(name, user_id):
         logging.error(f"Ошибка добавления в sheet: {e}")
         return False
 
-
-# Функция для чтения данных о зарплате и часах
 def get_salary_data(month_sheet, telegram_id):
     try:
+        registered, name = is_registered(telegram_id)
+        if not registered:
+            return None, None, None, None, None, None, None
         response = requests.get(EXCEL_URL)
         if response.status_code != 200:
             logging.error(f"Ошибка загрузки файла: {response.status_code}")
             return None, None, None, None, None, None, None
-
         file_like = io.BytesIO(response.content)
         df = pd.read_excel(file_like, sheet_name=month_sheet, engine='openpyxl')
-
-        # Ищем строку по Telegram ID (столбец B, индекс 1)
-        row = df[df.iloc[:, 1] == telegram_id]
-
+        row = df[df.iloc[:, 0] == name]
         if row.empty:
             return None, None, None, None, None, None, None
-
-        name = row.iloc[0, 0]  # Столбец A - имя
         columns = df.columns
         hours_first_col = columns.get_loc('Общие часы 1 половина') if 'Общие часы 1 половина' in columns else None
         hours_second_col = columns.get_loc('Общие часы 2 половина') if 'Общие часы 2 половина' in columns else None
         first_advance_col = columns.get_loc('Депозит 1') if 'Депозит 1' in columns else None
         second_advance_col = columns.get_loc('Депозит 2') if 'Депозит 2' in columns else None
         total_salary_col = columns.get_loc('Итоговая з/п') if 'Итоговая з/п' in columns else None
-
         hours_first = row.iloc[0, hours_first_col] if hours_first_col is not None else 0
         hours_second = row.iloc[0, hours_second_col] if hours_second_col is not None else 0
         total_hours = hours_first + hours_second
         first_advance = row.iloc[0, first_advance_col] if first_advance_col is not None else 0
         second_advance = row.iloc[0, second_advance_col] if second_advance_col is not None else 0
         total_salary = row.iloc[0, total_salary_col] if total_salary_col is not None else 0
-
         return name, hours_first, hours_second, total_hours, first_advance, second_advance, total_salary
     except Exception as e:
         logging.error(f"Ошибка чтения данных: {e}")
         return None, None, None, None, None, None, None
 
-
-# Функция для получения данных о табеле
 def get_tabel_data(user_name, month_sheet):
     try:
         response = requests.get(TABEL_URL)
         if response.status_code != 200:
             logging.error(f"Ошибка загрузки табеля: {response.status_code}")
             return []
-
         file_like = io.BytesIO(response.content)
-        df = pd.read_excel(file_like, sheet_name=month_sheet, engine='openpyxl', header=None, parse_dates=False)  # Добавили parse_dates=False
-
-        # Определяем точки: ассоциируем каждый столбец с точкой
+        df = pd.read_excel(file_like, sheet_name=month_sheet, engine='openpyxl', header=None, parse_dates=False)
         header = df.iloc[0]
         points = {}
         current_point = None
@@ -137,111 +210,72 @@ def get_tabel_data(user_name, month_sheet):
                 current_point = header[col]
             if current_point:
                 points[col] = current_point
-
-        # Словарь для родительного падежа месяцев
         month_genitive = {
-            'Январь': 'января',
-            'Февраль': 'февраля',
-            'Март': 'марта',
-            'Апрель': 'апреля',
-            'Май': 'мая',
-            'Июнь': 'июня',
-            'Июль': 'июля',
-            'Август': 'августа',
-            'Сентябрь': 'сентября',
-            'Октябрь': 'октября',
-            'Ноябрь': 'ноября',
-            'Декабрь': 'декабря'
+            'Январь': 'января', 'Февраль': 'февраля', 'Март': 'марта', 'Апрель': 'апреля',
+            'Май': 'мая', 'Июнь': 'июня', 'Июль': 'июля', 'Август': 'августа',
+            'Сентябрь': 'сентября', 'Октябрь': 'октября', 'Ноябрь': 'ноября', 'Декабрь': 'декабря'
         }
-
-        base = datetime(1899, 12, 30)  # База для Excel дат (Windows версия)
+        base = datetime(1899, 12, 30)
         shifts = []
-        for row_idx in range(1, df.shape[0]):  # Переименовали row в row_idx для ясности
+        for row_idx in range(1, df.shape[0]):
             day_abbr = df.iloc[row_idx, 0]
             if pd.isna(day_abbr):
                 continue
             serial = df.iloc[row_idx, 1]
             if pd.isna(serial):
                 continue
-
-            # Обработка serial: если datetime, конвертируем в дату напрямую
             if isinstance(serial, datetime):
                 date = serial
             else:
                 try:
-                    serial = float(serial)  # На случай, если это float
+                    serial = float(serial)
                     date = base + timedelta(days=serial)
                 except (ValueError, TypeError):
                     continue
-
             for col in range(2, df.shape[1]):
                 cell = df.iloc[row_idx, col]
-                if isinstance(cell, str) and user_name in cell:  # Проверяем наличие имени (на случай с ролью)
+                if isinstance(cell, str) and user_name in cell:
                     point = points.get(col)
                     if point:
                         shift_str = f"{day_abbr}, {date.day} {month_genitive.get(month_sheet, month_sheet.lower())}: {point}"
                         shifts.append(shift_str)
-
         return shifts
     except Exception as e:
         logging.error(f"Ошибка чтения табеля: {e}")
         return []
 
-
-# Функция для отправки напоминаний
 def send_reminders():
     try:
-        # Загрузка списка сотрудников
+        tz = zoneinfo.ZoneInfo("Europe/Moscow")
+        now = datetime.now(tz=tz)
+        tomorrow = now + timedelta(days=1)
+        month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+        month_sheet = month_names[tomorrow.month - 1]
         response = requests.get(EXCEL_URL)
         if response.status_code != 200:
             logging.error(f"Ошибка загрузки списка сотрудников: {response.status_code}")
             return
-
         file_like = io.BytesIO(response.content)
         df_emp = pd.read_excel(file_like, sheet_name="Список сотрудников", engine='openpyxl')
-
         name_to_id = {}
         for i in range(len(df_emp)):
             name = str(df_emp.iloc[i, 0]).strip()
             tid = df_emp.iloc[i, 1]
             if pd.notna(tid):
                 name_to_id[name] = int(tid)
-
-        # Определение завтрашней даты
-        now = datetime.now()
-        tomorrow = now + timedelta(days=1)
-        month_names_list = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
-        month_sheet = month_names_list[tomorrow.month - 1]
-
-        # Словарь для родительного падежа месяцев
         month_genitive = {
-            'Январь': 'января',
-            'Февраль': 'февраля',
-            'Март': 'марта',
-            'Апрель': 'апреля',
-            'Май': 'мая',
-            'Июнь': 'июня',
-            'Июль': 'июля',
-            'Август': 'августа',
-            'Сентябрь': 'сентября',
-            'Октябрь': 'октября',
-            'Ноябрь': 'ноября',
-            'Декабрь': 'декабря'
+            'Январь': 'января', 'Февраль': 'февраля', 'Март': 'марта', 'Апрель': 'апреля',
+            'Май': 'мая', 'Июнь': 'июня', 'Июль': 'июля', 'Август': 'августа',
+            'Сентябрь': 'сентября', 'Октябрь': 'октября', 'Ноябрь': 'ноября', 'Декабрь': 'декабря'
         }
-
         base = datetime(1899, 12, 30)
-        serial_tomorrow = (tomorrow - base).days
-
-        # Загрузка табеля
+        serial_tomorrow = (tomorrow.date() - base.date()).days
         response = requests.get(TABEL_URL)
         if response.status_code != 200:
             logging.error(f"Ошибка загрузки табеля: {response.status_code}")
             return
-
         file_like = io.BytesIO(response.content)
         df_tabel = pd.read_excel(file_like, sheet_name=month_sheet, engine='openpyxl', header=None, parse_dates=False)
-
-        # Определяем точки
         header = df_tabel.iloc[0]
         points = {}
         current_point = None
@@ -250,20 +284,21 @@ def send_reminders():
                 current_point = header[col]
             if current_point:
                 points[col] = current_point
-
-        # Находим строку для завтрашнего дня
         shift_row = None
         for r in range(1, df_tabel.shape[0]):
             s = df_tabel.iloc[r, 1]
-            if isinstance(s, (int, float)) and int(s) == serial_tomorrow:
-                shift_row = r
-                break
-
+            if isinstance(s, datetime):
+                serial_from_sheet = (s.date() - base.date()).days
+                if serial_from_sheet == serial_tomorrow:
+                    shift_row = r
+                    break
+            elif isinstance(s, (int, float)):
+                if int(s) == serial_tomorrow:
+                    shift_row = r
+                    break
         if shift_row is None:
             logging.info("Нет смен на завтра")
             return
-
-        # Извлекаем имена и точки
         for col in range(2, df_tabel.shape[1]):
             cell = df_tabel.iloc[shift_row, col]
             if isinstance(cell, str) and cell.strip():
@@ -278,60 +313,27 @@ def send_reminders():
     except Exception as e:
         logging.error(f"Ошибка в отправке напоминаний: {e}")
 
-
-# Функция для создания календаря
-def create_calendar(year=None, month=None, user_id=None):
-    now = datetime.now()
-    year = year or now.year
-    month = month or now.month
-    markup = InlineKeyboardMarkup(row_width=7)
-    month_names_list = list(month_names.values())
-    header = [InlineKeyboardButton("<", callback_data=f"cal-prev-{year}-{month}"),
-              InlineKeyboardButton(month_names_list[month-1], callback_data="ignore"),
-              InlineKeyboardButton(">", callback_data=f"cal-next-{year}-{month}")]
-    markup.add(*header)
-    week_days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-    markup.add(*[InlineKeyboardButton(d, callback_data="ignore") for d in week_days])
-    month_cal = calendar.monthcalendar(year, month)
-    for week in month_cal:
-        row = []
-        for day in week:
-            if day == 0:
-                row.append(InlineKeyboardButton(" ", callback_data="ignore"))
-            else:
-                row.append(InlineKeyboardButton(str(day), callback_data=f"cal-day-{day}-{month}-{year}"))
-        markup.add(*row)
-    return markup
-
-# Функция для создания выбора часа
-def create_hour_picker(prefix):
-    markup = InlineKeyboardMarkup(row_width=4)
-    for h in range(0, 24):
-        markup.add(InlineKeyboardButton(f"{h:02d}", callback_data=f"{prefix}_hour_{h}"))
-    return markup
-
-# Функция для создания выбора минуты
-def create_minute_picker(prefix, hour):
-    markup = InlineKeyboardMarkup(row_width=4)
-    for m in range(0, 60, 15):  # Шаги по 15 мин
-        markup.add(InlineKeyboardButton(f"{m:02d}", callback_data=f"{prefix}_min_{hour}_{m}"))
-    return markup
-
-# Функция для генерации главного меню
 def get_main_menu_markup(registered):
+    from telebot.types import WebAppInfo
     markup = InlineKeyboardMarkup(row_width=2)
     if not registered:
         markup.add(InlineKeyboardButton("Зарегистрироваться ✅", callback_data="register"))
     else:
         markup.add(
             InlineKeyboardButton("Узнать зарплату 💰", callback_data="salary"),
-            InlineKeyboardButton("Мой табель 📅", callback_data="tabel"),
-            InlineKeyboardButton("Отчитаться о смене 📝", callback_data="report_shift")
+            InlineKeyboardButton("Мой табель 📅", callback_data="tabel")
+        )
+        markup.add(
+            InlineKeyboardButton("Записать смену 🕒", callback_data="log_shift")
+        )
+        markup.add(
+            InlineKeyboardButton("Календарь смен (Мини-апп)", web_app=WebAppInfo(url="https://telegram-bot-1-ydll.onrender.com"))
+        )
+        markup.add(
+            InlineKeyboardButton("Заполнить форму 📝", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse")
         )
     return markup
 
-
-# Функция для генерации меню месяцев
 def get_month_menu_markup():
     markup = InlineKeyboardMarkup(row_width=3)
     markup.add(
@@ -342,454 +344,338 @@ def get_month_menu_markup():
     markup.add(InlineKeyboardButton("Назад 🔙", callback_data="back_to_menu"))
     return markup
 
-
-# Обработчик /start
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
     registered, name = is_registered(user_id)
-
-    if registered:
-        welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
-    else:
-        welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
-
+    welcome_msg = f"*Добро похвал, {name}!*\n\nВыберите действие ниже. 😊" if registered else "*Добро похвал!*\n\nВыберите действие ниже. 😊"
     markup = get_main_menu_markup(registered)
-
-    bot.send_message(
+    bot.send_photo(
         message.chat.id,
-        welcome_msg,
+        photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+        caption=welcome_msg,
         parse_mode='Markdown',
         reply_markup=markup
     )
 
-
-# Обработчик нажатия кнопок
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
     user_id = call.from_user.id
     registered, name = is_registered(user_id)
-
     if call.data == "register":
         if registered:
             bot.answer_callback_query(call.id, "Вы уже зарегистрированы!")
             return
         user_states[user_id] = "waiting_for_name"
         bot.answer_callback_query(call.id)
-        bot.send_message(
-            user_id,
-            "*Введите ваше имя:* ✍️",
-            parse_mode='Markdown'
-        )
-
+        bot.send_message(user_id, "*Введите ваше имя:* ✍️", parse_mode='Markdown')
     elif call.data == "salary":
         if not registered:
-            bot.answer_callback_query(call.id, "Вы не зарегистрированы! Сначала зарегистрируйтесь.")
+            bot.answer_callback_query(call.id, "Вы не зарегистрированы!")
             return
         bot.answer_callback_query(call.id)
-        bot.edit_message_text(
-            "*Выберите месяц для просмотра зарплаты:* 📅",
+        bot.edit_message_caption(
+            caption="*Выберите месяц для просмотра зарплаты:* 📅",
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             parse_mode='Markdown',
             reply_markup=get_month_menu_markup()
         )
-
     elif call.data == "tabel":
         if not registered:
-            bot.answer_callback_query(call.id, "Вы не зарегистрированы! Сначала зарегистрируйтесь.")
+            bot.answer_callback_query(call.id, "Вы не зарегистрированы!")
             return
         bot.answer_callback_query(call.id)
-
-        # Определяем текущий месяц
-        month_names_list = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
-        current_month = month_names_list[datetime.now().month - 1]
-
+        tz = zoneinfo.ZoneInfo("Europe/Moscow")
+        month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+        current_month = month_names[datetime.now(tz=tz).month - 1]
         shifts = get_tabel_data(name, current_month)
-
-        if not shifts:
-            tabel_msg = f"*Нет смен в {current_month.lower()}.* 😔"
-        else:
-            tabel_msg = f"**Ваши смены за {current_month}:** 📅\n\n" + "\n".join([f"- {shift}" for shift in shifts])
-
-        bot.send_message(
-            call.message.chat.id,
-            tabel_msg,
-            parse_mode='Markdown'
-        )
-
-        # Reset the menu message back to main
-        if registered:
-            welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
-        else:
-            welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
-
-        markup = get_main_menu_markup(registered)
-
-        bot.edit_message_text(
-            welcome_msg,
+        tabel_msg = f"**Ваши смены за {current_month}:** 📅\n\n" + "\n".join([f"- {shift}" for shift in shifts]) if shifts else f"*Нет смен в {current_month.lower()}.* 😔"
+        bot.send_message(call.message.chat.id, tabel_msg, parse_mode='Markdown')
+        welcome_msg = f"*Добро похвал, {name}!*\n\nВыберите действие ниже. 😊"
+        markup = get_main_menu_markup(True)
+        bot.edit_message_caption(
+            caption=welcome_msg,
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             parse_mode='Markdown',
             reply_markup=markup
         )
-
     elif call.data.startswith("month_"):
         month = call.data.split("_")[1]
         bot.answer_callback_query(call.id)
-
-        name, hours_first, hours_second, total_hours, first_advance, second_advance, total_salary = get_salary_data(
-            month, user_id)
-
-        if name is None:
+        result = get_salary_data(month, user_id)
+        if result[0] is None:
             salary_msg = "*Данные не найдены для вашего ID в этом месяце.* 😔"
         else:
-            salary_msg = f"**Ваша зарплата за {month}:** 💼\n\n" \
-                         f"**Имя:** {name} 👤\n\n" \
-                         f"**Отработано часов за 1 половину:** {hours_first} ⏰\n" \
-                         f"**Отработано часов за 2 половину:** {hours_second} ⏰\n" \
-                         f"**Всего часов:** {total_hours} ⏱️🔥\n\n" \
-                         f"**Первый аванс:** {first_advance} руб. 💰\n" \
-                         f"**Второй аванс:** {second_advance} руб. 💰\n" \
-                         f"**Итоговая з/п:** {total_salary} руб. 💵🎉"
-
-        bot.send_message(
-            call.message.chat.id,
-            salary_msg,
-            parse_mode='Markdown'
-        )
-
-        # Reset the menu message back to main
-        if registered:
-            welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
-        else:
-            welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
-
-        markup = get_main_menu_markup(registered)
-
-        bot.edit_message_text(
-            welcome_msg,
+            name, hours_first, hours_second, total_hours, first_advance, second_advance, total_salary = result
+            salary_msg = f"*Ваша зарплата за {month}:* 💼\n\n" \
+                         f"*Имя:* {name} 👤\n\n" \
+                         f"*Отработано часов за 1 половину:* {hours_first} ⏰\n" \
+                         f"*Отработано часов за 2 половину:* {hours_second} ⏰\n" \
+                         f"*Всего часов:* {total_hours} ⏱️\n\n" \
+                         f"*Первый аванс:* {first_advance} руб. 💰\n" \
+                         f"*Второй аванс:* {second_advance} руб. 💰\n" \
+                         f"*Итоговая з/п:* {total_salary} руб. 💵"
+        bot.send_message(call.message.chat.id, salary_msg, parse_mode='Markdown')
+        welcome_msg = f"*Добро похвал, {name}!*\n\nВыберите действие ниже. 😊"
+        markup = get_main_menu_markup(True)
+        bot.edit_message_caption(
+            caption=welcome_msg,
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             parse_mode='Markdown',
             reply_markup=markup
         )
-
     elif call.data == "back_to_menu":
         bot.answer_callback_query(call.id)
-        if registered:
-            welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
-        else:
-            welcome_msg = "*Добро пожаловать!*\n\nВыберите действие ниже. 😊"
-
+        welcome_msg = f"*Добро похвал, {name}!*\n\nВыберите действие ниже. 😊" if registered else "*Добро похвал!*\n\nВыберите действие ниже. 😊"
         markup = get_main_menu_markup(registered)
-
-        bot.edit_message_text(
-            welcome_msg,
+        bot.edit_message_caption(
+            caption=welcome_msg,
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             parse_mode='Markdown',
             reply_markup=markup
         )
-
-    elif call.data == "report_shift":
+    elif call.data == "log_shift":
         if not registered:
-            bot.answer_callback_query(call.id, "Вы не зарегистрированы! Сначала зарегистрируйтесь.")
+            bot.answer_callback_query(call.id, "Сначала зарегистрируйтесь!")
             return
         bot.answer_callback_query(call.id)
-        user_states[user_id] = {"state": "report_date"}
-        now = datetime.now()
-        bot.edit_message_text(
-            "*Выберите дату смены:*",
+        now = datetime.now(zoneinfo.ZoneInfo("Europe/Moscow"))
+        markup = generate_calendar(now.year, now.month)
+        bot.edit_message_caption(
+            caption="*Выберите дату смены:* 📅",
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             parse_mode='Markdown',
-            reply_markup=create_calendar(now.year, now.month)
+            reply_markup=markup
         )
-
-    elif call.data.startswith("cal-"):
-        parts = call.data.split('-')
-        if parts[1] == 'prev':
-            year = int(parts[2])
-            month = int(parts[3]) - 1
-            if month == 0:
-                month = 12
-                year -= 1
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=create_calendar(year, month))
-        elif parts[1] == 'next':
-            year = int(parts[2])
-            month = int(parts[3]) + 1
-            if month == 13:
-                month = 1
-                year += 1
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=create_calendar(year, month))
-        elif parts[1] == 'day':
-            day = int(parts[2])
-            month = int(parts[3])
-            year = int(parts[4])
-            shift_date = datetime(year, month, day)
-            if user_id in user_states and user_states[user_id].get("state") == "report_date":
-                user_states[user_id]["date"] = shift_date
-                user_states[user_id]["state"] = "report_venue"
-                venues = ["КУЧИНО", "РЕУТОВ (Победы)", "РЕУТОВ (Юбилейный)", "НЯМС", "ЛЕНИНА"]
+        user_states[user_id] = "selecting_date"
+    elif call.data.startswith("date_"):
+        date_str = call.data.split("_", 1)[1]
+        if shift_exists(user_id, date_str):
+            if has_edit_permission(user_id, date_str):
+                shift_data[user_id] = {"date": date_str}
+                user_states[user_id] = "selecting_point"
                 markup = InlineKeyboardMarkup(row_width=1)
-                for v in venues:
-                    markup.add(InlineKeyboardButton(v, callback_data=f"venue_{v}"))
-                bot.edit_message_text("*Выберите заведение:*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
-
-    elif call.data.startswith("venue_"):
-        venue = call.data[6:]
-        if user_id in user_states and user_states[user_id].get("state") == "report_venue":
-            user_states[user_id]["venue"] = venue
-            user_states[user_id]["state"] = "report_start_time"
-            bot.edit_message_text("*Выберите час начала смены:*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=create_hour_picker("start"))
-
-    elif call.data.startswith("start_hour_"):
-        hour = int(call.data[11:])
-        if user_id in user_states and user_states[user_id].get("state") == "report_start_time":
-            user_states[user_id]["temp_hour"] = hour
-            bot.edit_message_text(f"*Выберите минуты начала для {hour:02d}:*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=create_minute_picker("start", hour))
-
-    elif call.data.startswith("start_min_"):
-        parts = call.data.split('_')[2:]
-        hour = int(parts[0])
-        min_ = int(parts[1])
-        if user_id in user_states and user_states[user_id].get("state") == "report_start_time":
-            frac_start = (hour + min_ / 60) / 24
-            user_states[user_id]["start"] = frac_start
-            user_states[user_id]["state"] = "report_end_time"
-            bot.edit_message_text("*Выберите час конца смены:*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=create_hour_picker("end"))
-
-    elif call.data.startswith("end_hour_"):
-        hour = int(call.data[9:])
-        if user_id in user_states and user_states[user_id].get("state") == "report_end_time":
-            user_states[user_id]["temp_hour"] = hour
-            bot.edit_message_text(f"*Выберите минуты конца для {hour:02d}:*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=create_minute_picker("end", hour))
-
-    elif call.data.startswith("end_min_"):
-        parts = call.data.split('_')[2:]
-        hour = int(parts[0])
-        min_ = int(parts[1])
-        if user_id in user_states and user_states[user_id].get("state") == "report_end_time":
-            frac_end = (hour + min_ / 60) / 24
-            user_states[user_id]["end"] = frac_end
-            user_states[user_id]["state"] = "report_rating"
-            markup = InlineKeyboardMarkup(row_width=5)
-            for i in range(1, 6):
-                markup.add(InlineKeyboardButton(str(i), callback_data=f"rating_{i}"))
-            bot.edit_message_text("*Оцените смену (1-5):*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
-
-    elif call.data.startswith("rating_"):
-        rating = int(call.data[7:])
-        if user_id in user_states and user_states[user_id].get("state") == "report_rating":
-            user_states[user_id]["rating"] = rating
-            user_states[user_id]["state"] = "report_comment"
-            bot.edit_message_text("*Расскажите, как прошла ваша смена? (или /skip для пропуска)*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=None)
-
-    elif call.data.startswith("confirm_"):
-        if user_id != ADMIN_ID:
-            bot.answer_callback_query(call.id, "Только админ может подтверждать!")
-            return
-        confirm_user_id = int(call.data.split("_")[1])
-        confirm_name = pending_users.get(confirm_user_id)
-        if confirm_name:
-            # Предполагаем, что админ уже добавил в Sheets вручную — не добавляем автоматически
-            bot.answer_callback_query(call.id, "Подтверждено!")
-            bot.edit_message_reply_markup(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                reply_markup=None  # Удаляем кнопки
-            )
-
-            # Проверяем регистрацию (должна быть True, если админ добавил)
-            registered, name = is_registered(confirm_user_id)
-            if registered:
-                welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
-                markup = get_main_menu_markup(registered=True)  # Меню с "Узнать зарплату"
-
-                bot.send_message(
-                    confirm_user_id,
-                    "*Ваша регистрация подтверждена! 🎉*",
-                    parse_mode='Markdown'
-                )
-                bot.send_message(
-                    confirm_user_id,
-                    welcome_msg,
+                for point in WORK_POINTS:
+                    markup.add(InlineKeyboardButton(point, callback_data=f"point_{point}"))
+                markup.add(InlineKeyboardButton("Назад 🔙", callback_data="log_shift"))
+                bot.edit_message_caption(
+                    caption=f"*Выбрана дата:* {date_str}\n*Выберите заведение:*",
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
                     parse_mode='Markdown',
                     reply_markup=markup
                 )
             else:
-                # Если админ забыл добавить в Sheets
-                bot.send_message(
-                    confirm_user_id,
-                    "*Регистрация подтверждена, но данные не найдены. Свяжитесь с админом.* 😔",
-                    parse_mode='Markdown'
+                markup = InlineKeyboardMarkup()
+                markup.add(InlineKeyboardButton("✉️ Запросить изменение", callback_data=f"request_edit_{date_str}"))
+                markup.add(InlineKeyboardButton("Назад 🔙", callback_data="log_shift"))
+                bot.edit_message_caption(
+                    caption=f"Смена на {date_str} уже зафиксирована.\nХотите запросить изменение?",
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    reply_markup=markup
                 )
-                bot.answer_callback_query(call.id, "Пользователь не в Sheets — добавьте вручную!")
-
+        else:
+            shift_data[user_id] = {"date": date_str}
+            user_states[user_id] = "selecting_point"
+            markup = InlineKeyboardMarkup(row_width=1)
+            for point in WORK_POINTS:
+                markup.add(InlineKeyboardButton(point, callback_data=f"point_{point}"))
+            markup.add(InlineKeyboardButton("Назад 🔙", callback_data="log_shift"))
+            bot.edit_message_caption(
+                caption=f"*Выбрана дата:* {date_str}\n*Выберите заведение:*",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                parse_mode='Markdown',
+                reply_markup=markup
+            )
+    elif call.data.startswith("cal_"):
+        _, year, month = call.data.split("_")
+        year, month = int(year), int(month)
+        markup = generate_calendar(year, month)
+        bot.edit_message_reply_markup(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=markup
+        )
+    elif call.data.startswith("point_"):
+        point = call.data.split("_", 1)[1]
+        if user_id not in shift_data:
+            bot.answer_callback_query(call.id, "Ошибка: начните сначала.")
+            return
+        shift_data[user_id]["point"] = point
+        user_states[user_id] = "entering_time_in"
+        bot.send_message(user_id, "Время прихода (ЧЧ:ММ):")
+    elif call.data == "confirm_shift":
+        data = shift_data.get(user_id)
+        if not data:
+            bot.answer_callback_query(call.id, "Ошибка данных.")
+            return
+        username = call.from_user.username
+        status = "Смена не защищена" if has_edit_permission(user_id, data["date"]) else "Зафиксировано"
+        success = save_shift_to_sheet(
+            user_id, username, data["date"], data["point"],
+            data["time_in"], data["time_out"], data["total_hours"], status
+        )
+        if success:
+            msg = "Смена зафиксирована!" if status == "Зафиксировано" else "Смена обновлена! (требует проверки)"
+            bot.send_message(user_id, msg)
+        else:
+            bot.send_message(user_id, "Ошибка записи.")
+        shift_data.pop(user_id, None)
+        user_states.pop(user_id, None)
+        welcome_msg = f"*Добро похвал, {name}!*\n\nВыберите действие ниже. 😊"
+        markup = get_main_menu_markup(True)
+        bot.edit_message_caption(
+            caption=welcome_msg,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
+    elif call.data.startswith("request_edit_"):
+        date_str = call.data.split("_", 2)[2]
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("Разрешить", callback_data=f"allow_edit_{user_id}_{date_str}"),
+            InlineKeyboardButton("Отклонить", callback_data=f"deny_edit_{user_id}_{date_str}")
+        )
+        bot.send_message(
+            ADMIN_ID,
+            f"Запрос на изменение смены:\nID: {user_id}\nДата: {date_str}\nИмя: {name}",
+            reply_markup=markup
+        )
+        bot.answer_callback_query(call.id, "Запрос отправлен админу!")
+    elif call.data.startswith("allow_edit_"):
+        if call.from_user.id != ADMIN_ID:
+            return
+        _, target_user_id, date_str = call.data.split("_", 2)
+        target_user_id = int(target_user_id)
+        if grant_edit_permission(target_user_id, date_str):
+            bot.send_message(target_user_id, f"Вам разрешено изменить смену на {date_str}.")
+            bot.answer_callback_query(call.id, "Разрешено!")
+        else:
+            bot.answer_callback_query(call.id, "Ошибка.")
+        bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
+    elif call.data.startswith("deny_edit_"):
+        if call.from_user.id != ADMIN_ID:
+            return
+        _, target_user_id, date_str = call.data.split("_", 2)
+        target_user_id = int(target_user_id)
+        bot.send_message(target_user_id, f"Админ отклонил запрос на изменение смены на {date_str}.")
+        bot.answer_callback_query(call.id, "Отклонено!")
+        bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
+    elif call.data.startswith("confirm_"):
+        if user_id != ADMIN_ID:
+            bot.answer_callback_query(call.id, "Только админ!")
+            return
+        confirm_user_id = int(call.data.split("_")[1])
+        confirm_name = pending_users.get(confirm_user_id)
+        if confirm_name:
+            bot.answer_callback_query(call.id, "Подтверждено!")
+            bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
+            add_to_sheet(confirm_name, confirm_user_id)
+            welcome_msg = f"*Добро похвал, {confirm_name}!*\n\nВыберите действие ниже. 😊"
+            markup = get_main_menu_markup(True)
+            bot.send_message(confirm_user_id, "*Регистрация подтверждена!*", parse_mode='Markdown')
+            bot.send_photo(
+                confirm_user_id,
+                photo=open("photo_2025-10-28_01-49-34.jpg", "rb"),
+                caption=welcome_msg,
+                parse_mode='Markdown',
+                reply_markup=markup
+            )
             del pending_users[confirm_user_id]
         else:
             bot.answer_callback_query(call.id, "Пользователь не найден!")
-
     elif call.data.startswith("reject_"):
         if user_id != ADMIN_ID:
-            bot.answer_callback_query(call.id, "Только админ может отклонять!")
+            bot.answer_callback_query(call.id, "Только админ!")
             return
         reject_user_id = int(call.data.split("_")[1])
         if reject_user_id in pending_users:
             bot.answer_callback_query(call.id, "Отклонено!")
-            bot.edit_message_reply_markup(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                reply_markup=None  # Удаляем кнопки
-            )
-            bot.send_message(
-                reject_user_id,
-                "*Ваша регистрация отклонена админом. 😔*\n\nПопробуйте снова или свяжитесь с поддержкой.",
-                parse_mode='Markdown'
-            )
+            bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
+            bot.send_message(reject_user_id, "*Регистрация отклонена. Попробуйте снова.*", parse_mode='Markdown')
             del pending_users[reject_user_id]
-        else:
-            bot.answer_callback_query(call.id, "Пользователь не найден!")
 
-    bot.answer_callback_query(call.id)
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id) == "entering_time_in")
+def handle_time_in(message):
+    try:
+        time_in = datetime.strptime(message.text.strip(), "%H:%M").time()
+        shift_data[message.from_user.id]["time_in"] = time_in.strftime("%H:%M")
+        user_states[message.from_user.id] = "entering_time_out"
+        bot.send_message(message.chat.id, "Время ухода (ЧЧ:ММ):")
+    except ValueError:
+        bot.send_message(message.chat.id, "Неверный формат. Пример: 09:00")
 
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id) == "entering_time_out")
+def handle_time_out(message):
+    try:
+        time_out = datetime.strptime(message.text.strip(), "%H:%M").time()
+        user_id = message.from_user.id
+        shift_data[user_id]["time_out"] = time_out.strftime("%H:%M")
+        ti = datetime.strptime(shift_data[user_id]["time_in"], "%H:%M")
+        to = datetime.strptime(shift_data[user_id]["time_out"], "%H:%M")
+        if to < ti:
+            to += timedelta(days=1)
+        total_hours = round((to - ti).total_seconds() / 3600, 2)
+        shift_data[user_id]["total_hours"] = total_hours
+        data = shift_data[user_id]
+        bot.send_message(
+            user_id,
+            f"Проверьте данные:\n"
+            f"Дата: {data['date']}\n"
+            f"Заведение: {data['point']}\n"
+            f"Приход: {data['time_in']}\n"
+            f"Уход: {data['time_out']}\n"
+            f"Часов: {total_hours}\n\n"
+            f"Подтвердить?",
+            reply_markup=InlineKeyboardMarkup().add(
+                InlineKeyboardButton("Да", callback_data="confirm_shift"),
+                InlineKeyboardButton("Нет", callback_data="log_shift")
+            )
+        )
+        user_states[user_id] = "confirming_shift"
+    except ValueError:
+        bot.send_message(message.chat.id, "Неверный формат. Пример: 18:00")
 
-# Обработчик текстовых сообщений (для регистрации и комментария)
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     user_id = message.from_user.id
     state = user_states.get(user_id)
-
-    if isinstance(state, str) and state == "waiting_for_name":
+    if state == "waiting_for_name":
         name = message.text.strip()
         username = message.from_user.username or "Не указан"
-        # Сохраняем pending
         pending_users[user_id] = name
-        # Отправляем пользователю
         bot.send_message(
             user_id,
-            f"*Заявка на регистрацию отправлена! 🎉*\n\nВаше имя: {name}\nОжидайте подтверждения от админа.",
+            f"*Заявка отправлена!*\nОжидайте подтверждения.",
             parse_mode='Markdown'
         )
-        # Отправляем админу с кнопками
         markup = InlineKeyboardMarkup()
         markup.add(
-            InlineKeyboardButton("Подтвердить ✅", callback_data=f"confirm_{user_id}"),
-            InlineKeyboardButton("Отклонить ❌", callback_data=f"reject_{user_id}")
+            InlineKeyboardButton("Подтвердить", callback_data=f"confirm_{user_id}"),
+            InlineKeyboardButton("Отклонить", callback_data=f"reject_{user_id}")
         )
+        admin_msg = f"*Новая регистрация!*\n\nИмя: {escape_md_v2(name)}\nUsername: @{escape_md_v2(username)}\nID: {user_id}"
         try:
-            bot.send_message(
-                ADMIN_ID,
-                f"*Новая регистрация! 📋*\n\nИмя: {name}\nUsername: @{username}\nID: {user_id}",
-                parse_mode='Markdown',
-                reply_markup=markup
-            )
-        except Exception as e:
-            logging.error(f"Ошибка отправки админу: {e}")
-        # Сбрасываем состояние
-        del user_states[user_id]
+            bot.send_message(ADMIN_ID, admin_msg, parse_mode='MarkdownV2', reply_markup=markup)
+        except:
+            bot.send_message(ADMIN_ID, admin_msg.replace('*', '').replace('\\', ''), reply_markup=markup)
+        user_states.pop(user_id, None)
 
-    elif isinstance(state, dict) and state.get("state") == "report_comment":
-        comment = message.text.strip() if message.text.strip() != "/skip" else ""
-
-        # Собираем данные
-        shift_date = state["date"]
-        venue = state["venue"]
-        start_frac = state["start"]
-        end_frac = state["end"]
-        rating = state["rating"]
-
-        # Получаем имя
-        _, name = is_registered(user_id)
-
-        # Рассчитываем часы
-        hours = round((end_frac - start_frac) * 24)
-
-        # Определяем месяц
-        month_sheet = month_names.get(shift_date.month, 'Неизвестно')
-
-        # Получаем ставку
-        try:
-            worksheet = sheet.worksheet(month_sheet)
-            data = worksheet.get_all_values()
-            df = pd.DataFrame(data[1:], columns=data[0]) if data else pd.DataFrame()
-
-            row = df[df['Telegram ID'].astype(str).str.strip() == str(user_id)]
-            if row.empty:
-                row = df[df['Имя сотрудника'].str.strip() == name]
-            if row.empty:
-                row = df[df.iloc[:, 0].str.strip() == name]
-
-            stake = float(row['Ставка'].values[0]) if not row.empty and 'Ставка' in row.columns else 250.0  # fallback 250
-        except Exception as e:
-            logging.error(f"Ошибка получения ставки: {e}")
-            stake = 250.0
-
-        earn = int(hours * stake)
-
-        # Отправляем подтверждение
-        confirm_msg = f"Привет, {name}! 👋 Твоя смена за {shift_date.strftime('%d.%m.%Y')} успешно засчитана. Время работы — {hours} ч. ⏱️ Ты заработал {earn} рублей! 💰 До новых встреч! 🙌"
-        bot.send_message(user_id, confirm_msg)
-
-        # База для serial
-        base = datetime(1899, 12, 30)
-        timestamp_serial = (datetime.now() - base).days + (datetime.now().hour / 24 + datetime.now().minute / 1440 + datetime.now().second / 86400)
-        date_serial = (shift_date - base).days
-
-        # Запись в "Сырые ответы формы"
-        try:
-            email = f"{message.from_user.username}@telegram.com" if message.from_user.username else ""
-            raw_worksheet = sheet.worksheet("Сырые ответы формы")
-            raw_worksheet.append_row([timestamp_serial, email, date_serial, venue, name, start_frac, end_frac, rating, comment, ""])
-        except Exception as e:
-            logging.error(f"Ошибка записи в сырые ответы: {e}")
-
-        # Запись в "База данных"
-        try:
-            base_worksheet = sheet.worksheet("База данных")
-            base_worksheet.append_row([date_serial, venue, name, start_frac, end_frac, hours])
-        except Exception as e:
-            logging.error(f"Ошибка записи в базу данных: {e}")
-
-        # Обновление месячного листа
-        try:
-            worksheet = sheet.worksheet(month_sheet)
-            data = worksheet.get_all_values()
-            headers = data[0]
-
-            date_str = str(date_serial)
-            col_index = headers.index(date_str) if date_str in headers else -1
-
-            if col_index != -1:
-                row_index = -1
-                for i in range(1, len(data)):
-                    row = data[i]
-                    if row[0].strip() == name or (len(row) > 1 and row[1].strip() == str(user_id)):
-                        row_index = i
-                        break
-                if row_index != -1:
-                    worksheet.update_cell(row_index + 1, col_index + 1, hours)
-        except Exception as e:
-            logging.error(f"Ошибка обновления месячного листа: {e}")
-
-        # Сбрасываем состояние
-        del user_states[user_id]
-
-        # Отправляем главное меню
-        welcome_msg = f"*Добро пожаловать, {name}!*\n\nВыберите действие ниже. 😊"
-        markup = get_main_menu_markup(True)
-        bot.send_message(user_id, welcome_msg, parse_mode='Markdown', reply_markup=markup)
-
-
-# Для webhook на Render
 app = flask.Flask(__name__)
-
+CORS(app)
 
 @app.route('/', methods=['GET', 'HEAD'])
 def index():
     return ''
-
 
 @app.route('/', methods=['POST'])
 def webhook():
@@ -801,18 +687,97 @@ def webhook():
     else:
         flask.abort(403)
 
+@app.route('/get-shifts', methods=['GET'])
+def get_shifts():
+    user_id = flask.request.args.get('user_id')
+    month = flask.request.args.get('month')
+    if not user_id or not month:
+        return jsonify({"error": "bad params"}), 400
+    try:
+        worksheet = client.open_by_key(SHEET_ID).worksheet("Сырые ответы формы ТГ")
+        records = worksheet.get_all_records()
+        shifts = {}
+        for rec in records:
+            tid = str(rec.get('Telegram ID', '')).strip()
+            date_raw = rec.get('Дата смены', '').strip()
+            if tid != user_id or not date_raw:
+                continue
+            try:
+                date_obj = datetime.strptime(date_raw, "%d.%m.%Y")
+                date_str = date_obj.strftime("%Y-%m-%d")
+            except:
+                continue
+            if not date_str.startswith(month):
+                continue
+            shifts[date_str] = {
+                "point": rec.get('Заведение', '').strip(),
+                "time_in": rec.get('Время прихода', '').strip(),
+                "time_out": rec.get('Время ухода', '').strip(),
+                "total_hours": str(rec.get('Всего часов', '')).strip()
+            }
+        return jsonify({"shifts": shifts})
+    except Exception as e:
+        logging.error(f"[get-shifts] Ошибка: {e}")
+        return jsonify({"shifts": {}}), 500
+
+@app.route('/save-shift', methods=['POST'])
+def save_shift():
+    data = flask.request.get_json(silent=True)
+    if not data:
+        return jsonify({"success": False, "error": "Нет данных"}), 400
+
+    telegram_id = str(data.get('telegram_id'))
+    date_str = data.get('date')
+    point = data.get('point')
+    time_in = data.get('time_in')
+    time_out = data.get('time_out')
+    total_hours = data.get('total_hours')
+
+    if not all([telegram_id, date_str, point, time_in, time_out]):
+        return jsonify({"success": False, "error": "Недостаточно данных"}), 400
+
+    try:
+        already_exists = shift_exists(telegram_id, date_str)
+        can_edit = not already_exists or has_edit_permission(telegram_id, date_str)
+
+        if already_exists and not can_edit:
+            return jsonify({
+                "success": False,
+                "error": "Смена уже зафиксирована. Запроси изменение у админа."
+            }), 403
+
+        status = "Зафиксировано"
+        if already_exists and can_edit:
+            status = "Смена не защищена"
+
+        success = save_shift_to_sheet(
+            telegram_id=telegram_id,
+            username=None,
+            date_str=date_str,
+            point=point,
+            time_in=time_in,
+            time_out=time_out,
+            total_hours=total_hours,
+            status=status
+        )
+
+        if success:
+            if already_exists:
+                grant_edit_permission(telegram_id, date_str)
+            return jsonify({"success": True})
+        else:
+            return jsonify({"success": False, "error": "Ошибка записи в таблицу"}), 500
+
+    except Exception as e:
+        logging.error(f"[save-shift] Ошибка: {e}")
+        return jsonify({"success": False, "error": "Серверная ошибка"}), 500
+
+scheduler = BackgroundScheduler(timezone=zoneinfo.ZoneInfo("Europe/Moscow"))
+scheduler.add_job(send_reminders, 'cron', hour=20, minute=58)
+scheduler.start()
 
 if __name__ == '__main__':
-    # Удаляем старый webhook, если есть
     bot.remove_webhook()
-    # Устанавливаем новый webhook (для Render)
-    bot.set_webhook(url='https://telegram-bot-1-ydll.onrender.com')  # Замени на свой URL Render
-
-    # Запускаем scheduler для напоминаний
-    scheduler = BackgroundScheduler(timezone="Europe/Moscow")  # Укажите нужный timezone
-    scheduler.add_job(send_reminders, 'cron', hour=20, minute=0)
-    scheduler.start()
-
-    # Запускаем Flask сервер
+    bot.set_webhook(url='https://telegram-bot-1-ydll.onrender.com')
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
