@@ -321,6 +321,7 @@ def send_reminders():
         logging.error(f"Ошибка в отправке напоминаний: {e}")
 
 def get_main_menu_markup(registered):
+    from telebot.types import WebAppInfo
     markup = InlineKeyboardMarkup(row_width=2)
     if not registered:
         markup.add(InlineKeyboardButton("Зарегистрироваться ✅", callback_data="register"))
@@ -331,6 +332,9 @@ def get_main_menu_markup(registered):
         )
         markup.add(
             InlineKeyboardButton("Записать смену 🕒", callback_data="log_shift")
+        )
+        markup.add(
+            InlineKeyboardButton("Календарь смен (Мини-апп)", web_app=WebAppInfo(url="https://mini-app-wchu.onrender.com"))
         )
         markup.add(
             InlineKeyboardButton("Заполнить форму 📝", url="https://docs.google.com/forms/u/0/d/e/1FAIpQLSdt4Xl89HwFdwWvGSzCxBh0zh-i2lQNcELEJYfspkyxmzGIsw/formResponse")
